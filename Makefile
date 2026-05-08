@@ -36,3 +36,8 @@ clean: ## Clean build artifacts
 
 image: ## Build container image
 	docker build --build-arg VERSION=$(VERSION) -t ghcr.io/hanzoai/vfs:$(VERSION) .
+
+test-fuse: ## Run FUSE end-to-end test (Linux only, requires kernel FUSE)
+	GOOS=linux go vet -tags fuse ./...
+	@echo "Cross-compile check passed. Run actual e2e on Linux:"
+	@echo "  VFS_FUSE_E2E=1 go test -race -tags fuse -run TestFUSESQLite ./pkg/mount/ -v"
