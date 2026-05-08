@@ -174,7 +174,8 @@ not `mount`. Use `make build-fuse` for the full mount-capable binary.
 |---|---|---|
 | 0.1.0 | Block layer, file:// + s3 backends, age PQ crypto, LRU cache, CLI (put/get/stats), tests | ✅ shipped |
 | 0.2.0 | Multi-block File API (ReadAt/WriteAt/Truncate/Sync), FS with inode tree + dirs, persisted metadata blob, **SQLite roundtrip proven** (20 KiB DB → encrypted blocks → restore → `PRAGMA integrity_check ok`) | ✅ shipped |
-| 0.3.0 | bazil.org/fuse mount: kernel POSIX VFS calls land at File.{ReadAt,WriteAt,Sync,Truncate}; SQLite opens DB directly on the mountpoint with no copy step. Linux + macOS. | next |
+| 0.3.0 | **bazil.org/fuse mount on Linux**: kernel POSIX read/write/fsync/setattr land at File.{ReadAt,WriteAt,Sync,Truncate}; SQLite opens DB directly on the mountpoint with no copy step. End-to-end FUSE+SQLite test verifies create→100 INSERTs→close→umount→remount→`PRAGMA integrity_check ok`, 100 rows survived. macOS via jacobsa/fuse lands in 0.3.1. | ✅ shipped |
+| 0.3.1 | macOS FUSE via github.com/jacobsa/fuse (bazil.org/fuse dropped macOS support). Same Mount(*vfs.FS, mountpoint) signature, build-tag `fuse_darwin`. | next |
 | 0.4.0 | NVMe disk write-back cache: spill LRU evictions to a local fs cache (configurable via `--cache-dir /var/cache/vfs --cache-size 10Gi`). Survives process restarts. | |
 | 0.5.0 | gcs + azureblob backends | |
 | 0.6.0 | K8s sidecar mode + Helm chart | |
