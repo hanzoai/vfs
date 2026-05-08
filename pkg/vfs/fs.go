@@ -331,6 +331,34 @@ func (fs *FS) Open(ctx context.Context, p string) (*File, error) {
 // inodeByID returns a live inode pointer (callers MUST hold fs.mu).
 func (fs *FS) inodeByID(id InodeID) *Inode { return fs.tree.inodes[id] }
 
+// PathOfInode walks the inode tree from the root and returns the
+// absolute path for the given inode ID. Returns os.ErrNotExist when
+// the ID is unknown. O(depth) — used by the darwin FUSE driver, which
+// gets ops as (inodeID, name) tuples instead of bazil.org/fuse's
+// node-pointer style.
+func (fs *FS) PathOfInode(id InodeID) (string, error) {
+	fs.mu.RLock()
+	defer fs.mu.RUnlock()
+	if id == RootInode {
+		return "/", nil
+	}
+	in := fs.tree.inodes[id]
+	if in == nil {
+		return "", os.ErrNotExist
+	}
+	// Build the path bottom-up.
+	parts := []string{in.Name}
+	cur := in
+	for cur.Parent != 0 && cur.Parent != RootInode {
+		cur = fs.tree.inodes[cur.Parent]
+		if cur == nil {
+			return "", fmt.Errorf("vfs.PathOfInode: dangling parent in chain for %d", id)
+		}
+		parts = append([]string{cur.Name}, parts...)
+	}
+	return "/" + strings.Join(parts, "/"), nil
+}
+
 func cloneInode(src *Inode) *Inode {
 	if src == nil {
 		return nil
