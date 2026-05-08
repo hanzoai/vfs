@@ -1,5 +1,5 @@
 bin/
-vfs
+/vfs
 *.test
 *.out
 .DS_Store
