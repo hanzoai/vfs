@@ -1,4 +1,4 @@
-//go:build fuse && linux
+//go:build fuse && (linux || darwin)
 
 // End-to-end FUSE + SQLite test. Mounts a *vfs.FS at a tempdir,
 // opens SQLite directly on the mountpoint (no copy step), runs CREATE
@@ -6,11 +6,12 @@
 // the database survived the round trip.
 //
 // Run with:
-//   GOOS=linux go test -tags fuse -run TestFUSESQLite ./pkg/mount/
+//   VFS_FUSE_E2E=1 go test -tags fuse -run TestFUSESQLite ./pkg/mount/
 //
-// Requires Linux kernel ≥ 3.10 with FUSE support (default on every
-// modern distro). The test allocates a tempdir mountpoint and
-// auto-unmounts on teardown.
+// Linux: requires kernel ≥ 3.10 with FUSE support (default on every
+// modern distro).
+// macOS: requires either macFUSE (https://macfuse.io) or fuse-t
+// (https://www.fuse-t.org). fuse-t is preferred — userspace, no kext.
 package mount_test
 
 import (
@@ -20,12 +21,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
-	"bazil.org/fuse"
 	"github.com/luxfi/age"
 	_ "modernc.org/sqlite"
 
@@ -47,10 +48,17 @@ func TestFUSESQLite(t *testing.T) {
 		t.Fatalf("mkdir mountpoint: %v", err)
 	}
 	defer func() {
-		// Best-effort unmount on test exit; fuse.Unmount may already
-		// have run via Mount's ctx-cancel goroutine.
-		_ = fuse.Unmount(mountpoint)
-		_ = exec.Command("fusermount", "-u", mountpoint).Run()
+		// Best-effort unmount on test exit; Mount's ctx-cancel goroutine
+		// has already triggered the FUSE driver's own Unmount, but we
+		// also try the platform tool as a belt-and-braces.
+		switch runtime.GOOS {
+		case "linux":
+			_ = exec.Command("fusermount", "-u", mountpoint).Run()
+			_ = exec.Command("fusermount3", "-u", mountpoint).Run()
+		case "darwin":
+			_ = exec.Command("umount", mountpoint).Run()
+			_ = exec.Command("diskutil", "unmount", mountpoint).Run()
+		}
 	}()
 
 	id, err := age.GenerateX25519Identity()
