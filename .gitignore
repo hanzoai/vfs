@@ -1,0 +1,11 @@
+bin/
+vfs
+*.test
+*.out
+.DS_Store
+.idea/
+.vscode/
+dist/
+.cache/
+CLAUDE.md
+AGENTS.md
