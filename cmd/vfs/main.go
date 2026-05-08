@@ -148,7 +148,7 @@ func main() {
 				return err
 			}
 			defer v.Close()
-			return mount.Mount(ctx, v, args[0])
+			return mount.MountWithVFSAdapter(ctx, v, args[0])
 		},
 	}
 
