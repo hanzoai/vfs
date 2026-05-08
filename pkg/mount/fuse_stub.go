@@ -13,9 +13,11 @@ import (
 )
 
 // Mount returns a build-tag error. Build with `-tags fuse` to enable.
-func Mount(ctx context.Context, v *vfs.VFS, mountpoint string) error {
-	_ = ctx
-	_ = v
-	_ = mountpoint
+func Mount(_ context.Context, _ *vfs.FS, _ string) error {
 	return fmt.Errorf("mount: this binary was built without FUSE support — use `make build-fuse` or `go build -tags fuse`")
+}
+
+// MountWithVFSAdapter is the same stub for the CLI helper.
+func MountWithVFSAdapter(_ context.Context, _ *vfs.VFS, _ string) error {
+	return Mount(nil, nil, "")
 }

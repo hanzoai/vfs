@@ -22,8 +22,16 @@ jobs:
           cache: true
       - name: vet
         run: go vet ./...
-      - name: test
+      - name: test (default)
         run: go test -race ./...
+      - name: vet (fuse)
+        run: go vet -tags fuse ./...
+      - name: install fuse
+        run: sudo apt-get update && sudo apt-get install -y fuse
+      - name: build (fuse)
+        run: go build -tags fuse ./...
+      - name: test (fuse + sqlite e2e)
+        run: VFS_FUSE_E2E=1 go test -race -tags fuse -run TestFUSESQLite ./pkg/mount/ -v
 
   build-amd64:
     needs: test
