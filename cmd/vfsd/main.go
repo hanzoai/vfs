@@ -28,7 +28,7 @@ import (
 	"github.com/hanzoai/vfs/pkg/backend"
 	_ "github.com/hanzoai/vfs/pkg/backend/file"
 	_ "github.com/hanzoai/vfs/pkg/backend/s3"
-	"github.com/hanzoai/vfs/pkg/vfs"
+	"github.com/hanzoai/vfs"
 	"github.com/hanzoai/zip"
 	"github.com/hanzoai/zip/middleware"
 )
