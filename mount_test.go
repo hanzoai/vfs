@@ -12,7 +12,7 @@ import (
 	"github.com/luxfi/age"
 	luxlog "github.com/luxfi/log"
 
-	"github.com/hanzoai/cloud/pkg/cloud"
+	"github.com/hanzoai/cloud"
 	"github.com/hanzoai/vfs/pkg/backend"
 	_ "github.com/hanzoai/vfs/pkg/backend/file"
 	"github.com/hanzoai/vfs"

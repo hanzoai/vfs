@@ -28,7 +28,7 @@ import (
 	"net/http"
 	"sync"
 
-	"github.com/hanzoai/cloud/pkg/cloud"
+	"github.com/hanzoai/cloud"
 	"github.com/hanzoai/vfs/pkg/backend"
 	"github.com/hanzoai/zip"
 )
