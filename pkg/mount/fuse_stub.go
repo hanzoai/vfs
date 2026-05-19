@@ -9,7 +9,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/hanzoai/vfs/pkg/vfs"
+	"github.com/hanzoai/vfs"
 )
 
 // Mount returns a build-tag error. Build with `-tags fuse` to enable.

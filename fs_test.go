@@ -13,7 +13,7 @@ import (
 
 	"github.com/hanzoai/vfs/pkg/backend"
 	_ "github.com/hanzoai/vfs/pkg/backend/file"
-	"github.com/hanzoai/vfs/pkg/vfs"
+	"github.com/hanzoai/vfs"
 )
 
 func newFS(t *testing.T) *vfs.FS {
