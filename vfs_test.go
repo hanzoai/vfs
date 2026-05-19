@@ -9,7 +9,7 @@ import (
 
 	"github.com/hanzoai/vfs/pkg/backend"
 	_ "github.com/hanzoai/vfs/pkg/backend/file"
-	"github.com/hanzoai/vfs/pkg/vfs"
+	"github.com/hanzoai/vfs"
 )
 
 func newRoundTripVFS(t *testing.T) *vfs.VFS {

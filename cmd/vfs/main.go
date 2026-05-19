@@ -17,7 +17,7 @@ import (
 	_ "github.com/hanzoai/vfs/pkg/backend/file" // registers file://
 	_ "github.com/hanzoai/vfs/pkg/backend/s3"   // registers s3://
 	"github.com/hanzoai/vfs/pkg/mount"
-	"github.com/hanzoai/vfs/pkg/vfs"
+	"github.com/hanzoai/vfs"
 
 	"github.com/luxfi/age"
 )
