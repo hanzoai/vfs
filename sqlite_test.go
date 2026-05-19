@@ -40,7 +40,7 @@ import (
 
 	"github.com/hanzoai/vfs/pkg/backend"
 	_ "github.com/hanzoai/vfs/pkg/backend/file"
-	"github.com/hanzoai/vfs/pkg/vfs"
+	"github.com/hanzoai/vfs"
 )
 
 func TestSQLiteRoundTrip(t *testing.T) {
