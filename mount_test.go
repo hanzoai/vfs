@@ -15,7 +15,7 @@ import (
 	"github.com/hanzoai/cloud/pkg/cloud"
 	"github.com/hanzoai/vfs/pkg/backend"
 	_ "github.com/hanzoai/vfs/pkg/backend/file"
-	"github.com/hanzoai/vfs/pkg/vfs"
+	"github.com/hanzoai/vfs"
 	"github.com/hanzoai/zip"
 )
 

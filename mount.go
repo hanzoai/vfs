@@ -4,7 +4,7 @@
 //
 // Wire shape:
 //
-//	import _ "github.com/hanzoai/vfs/pkg/vfs"  // init() registers
+//	import _ "github.com/hanzoai/vfs"  // init() registers
 //
 // VFS has no public HTTP surface today — it's an S3-backed virtual
 // block filesystem driven through FUSE mounts and CLI/sidecar usage.
@@ -34,7 +34,7 @@ import (
 )
 
 // Version is overridden at build time via -ldflags
-// "-X github.com/hanzoai/vfs/pkg/vfs.Version=...".
+// "-X github.com/hanzoai/vfs.Version=...".
 var Version = "dev"
 
 // mountedInstance is the VFS handle the HTTP routes operate against.
