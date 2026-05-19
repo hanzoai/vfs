@@ -33,7 +33,7 @@ import (
 	"github.com/hanzoai/vfs/pkg/backend"
 	_ "github.com/hanzoai/vfs/pkg/backend/file"
 	"github.com/hanzoai/vfs/pkg/mount"
-	"github.com/hanzoai/vfs/pkg/vfs"
+	"github.com/hanzoai/vfs"
 )
 
 func TestFUSESQLite(t *testing.T) {
