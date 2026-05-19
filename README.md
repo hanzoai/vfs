@@ -1,5 +1,49 @@
 # vfs
 
+Object-store abstraction with content-addressed, PQ-encrypted block storage. The storage backplane for HIP-0107 streaming replication.
+
+[![Status](https://img.shields.io/badge/status-beta-blue)]()
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)]()
+
+## Quick start
+
+```bash
+make build
+./bin/vfs put /tmp/in.txt --backend "s3://my-bucket/vfs-prefix?region=us-east-1" \
+  --age-recipient "$RECIPIENT" --age-key /tmp/vfs.key
+```
+
+## What this is
+
+`vfs` is a 4 KiB block-level virtual filesystem that hashes every block with blake3-256, encrypts every block with `luxfi/age` (X25519, optionally hybrid PQ via ML-KEM-768), and stores them on a pluggable backend (`file://`, `s3://`, `gcs://`, `azureblob://`). In-memory LRU for the hot tier, object store for the cold tier — every Hanzo Go service that needs unlimited write capacity uses `vfs` instead of pre-sizing a PVC. Already exposes `func Mount()` for HIP-0106 inclusion.
+
+## Specs
+
+Implements:
+- HIP-0107 Streaming Replication over VFS
+- HIP-0106 Unified Cloud Binary (vfs subsystem — already exposes `Mount()`)
+
+Companion to [hanzoai/replicate](https://github.com/hanzoai/replicate): `replicate` streams SQLite WAL frames file-level; `vfs` does block-level for any file.
+
+## Architecture
+
+```
+   write()  ->  vfs.PutBlock  ->  blake3-256 hash  ->  luxfi/age encrypt
+                                       |
+                          blocks/<2-hex-shard>/<full-hash>.zap.age
+                                       |
+                  file:// | s3:// | gcs:// | azureblob://
+                                       |
+                          in-memory LRU (hot)
+                                       |
+                          FUSE mount (lands in 0.2.0)
+```
+
+
+---
+
+# vfs
+
 S3-backed virtual block filesystem with PQ encryption — unlimited write storage for stateful services.
 
 [![Build](https://github.com/hanzoai/vfs/actions/workflows/build.yml/badge.svg)](https://github.com/hanzoai/vfs/actions/workflows/build.yml)
