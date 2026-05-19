@@ -23,7 +23,7 @@ import (
 	"github.com/jacobsa/fuse/fuseops"
 	"github.com/jacobsa/fuse/fuseutil"
 
-	"github.com/hanzoai/vfs/pkg/vfs"
+	"github.com/hanzoai/vfs"
 )
 
 // Mount mounts the given *vfs.FS at mountpoint and serves until the

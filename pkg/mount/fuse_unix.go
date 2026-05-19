@@ -26,7 +26,7 @@ import (
 	"bazil.org/fuse"
 	bzfs "bazil.org/fuse/fs"
 
-	"github.com/hanzoai/vfs/pkg/vfs"
+	"github.com/hanzoai/vfs"
 )
 
 // Mount mounts the given *vfs.FS at mountpoint and serves until the
