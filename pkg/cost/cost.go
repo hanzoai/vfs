@@ -246,3 +246,202 @@ func Report(name string, w Workload) string {
 	}
 	return b.String()
 }
+
+// ---------------------------------------------------------------------
+// Tiered storage: hot SSD + cold object-store archive
+// ---------------------------------------------------------------------
+
+// Tiered describes a workload split between a hot tier (local block
+// storage / SSD, sized for "recent N" data) and a cold tier (VFS into
+// an object-store backend, holding everything older than the hot
+// horizon).
+//
+// The model is brand-neutral: blocks/SSTs/snapshots/files all reduce
+// to a steady-state byte rate (RatePerSecond), a hot retention window
+// (HotWindow), and a cold retention horizon (ColdRetention).
+type Tiered struct {
+	// RatePerSecond is the steady-state byte production rate (e.g. a
+	// validator emitting finalized state at X MB/s).
+	RatePerSecond float64
+
+	// HotWindow is how long the most-recent data stays on local SSD.
+	// Typical values: 24h, 7 days, 30 days.
+	HotWindow time.Duration
+
+	// ColdRetention is how long data is held in the cold archive
+	// before tier-down or deletion. Use a large value (years) to
+	// model "keep forever".
+	ColdRetention time.Duration
+
+	// HotBackend selects the local-disk pricing entry (typically
+	// BackendPVCBlock).
+	HotBackend Backend
+
+	// ColdBackend selects the object-store entry.
+	ColdBackend Backend
+
+	// PutsPerByte / GetsPerByte map raw bytes to backend request
+	// counts. A pure-stream workload writing 64 KiB objects gives
+	// PutsPerByte = 1/65536. A 4 KiB-block content-addressed VFS
+	// gives PutsPerByte = 1/4096.
+	PutsPerByte float64
+	GetsPerByte float64
+
+	// EgressGBPerMonth is what leaves the cold backend's edge per
+	// month (intra-region reads are free for most providers).
+	EgressGBPerMonth float64
+}
+
+// TieredEstimate is the combined cost of a Tiered workload.
+type TieredEstimate struct {
+	Hot           Estimate
+	Cold          Estimate
+	TotalUSD      float64
+	HotStorageGB  float64
+	ColdStorageGB float64
+}
+
+// String prints both tiers + the combined total on one short summary.
+func (e TieredEstimate) String() string {
+	return fmt.Sprintf(
+		"hot[%s %.1f GB]=$%.2f  cold[%s %.1f GB]=$%.2f  total=$%.2f/mo",
+		e.Hot.Backend, e.HotStorageGB, e.Hot.TotalUSD,
+		e.Cold.Backend, e.ColdStorageGB, e.Cold.TotalUSD,
+		e.TotalUSD,
+	)
+}
+
+// Estimate computes the per-month cost for a Tiered workload.
+//
+// Hot tier holds RatePerSecond * HotWindow bytes; no per-op cost (PVC
+// has no PUT/GET fees), no egress (in-region only).
+//
+// Cold tier holds RatePerSecond * ColdRetention bytes, with PUTs/GETs
+// derived from PutsPerByte * (RatePerSecond * seconds/month).
+func (t Tiered) Estimate() TieredEstimate {
+	const secondsPerMonth = float64(time.Hour*24*30) / float64(time.Second)
+
+	hotBytes := t.RatePerSecond * t.HotWindow.Seconds()
+	coldBytes := t.RatePerSecond * t.ColdRetention.Seconds()
+	bytesPerMonth := t.RatePerSecond * secondsPerMonth
+
+	hot := Workload{
+		StorageGB:        hotBytes / (1 << 30),
+		PutsPerMonth:     0, // local SSD has no per-op cost
+		GetsPerMonth:     0,
+		EgressGBPerMonth: 0,
+		Description:      "hot tier (local SSD)",
+	}
+	cold := Workload{
+		StorageGB:        coldBytes / (1 << 30),
+		PutsPerMonth:     bytesPerMonth * t.PutsPerByte,
+		GetsPerMonth:     bytesPerMonth * t.GetsPerByte,
+		EgressGBPerMonth: t.EgressGBPerMonth,
+		Description:      fmt.Sprintf("cold archive (%s retention)", t.ColdRetention),
+	}
+
+	he := EstimateFor(hot, t.HotBackend)
+	ce := EstimateFor(cold, t.ColdBackend)
+	return TieredEstimate{
+		Hot:           he,
+		Cold:          ce,
+		TotalUSD:      he.TotalUSD + ce.TotalUSD,
+		HotStorageGB:  hot.StorageGB,
+		ColdStorageGB: cold.StorageGB,
+	}
+}
+
+// ---------------------------------------------------------------------
+// Cluster archive sharing: 1 writer + N readers, one shared bucket
+// ---------------------------------------------------------------------
+
+// Cluster models a fleet of nodes that share a single content-addressed
+// cold archive. This is the architectural win that makes object-store
+// archival cost-effective at scale:
+//
+//   - Writers (typically validators) PUT new data into the archive.
+//     Because content addressing dedupes identical bytes across all
+//     writers, the effective storage + PUT cost stays linear in
+//     CHAIN GROWTH, not in writer count.
+//   - Readers (read-replicas, explorers, indexers, archive nodes,
+//     follow nodes) GET data from the same archive bucket — they
+//     never PUT, and they don't need their own copy of historical
+//     state on disk.
+//
+// The cluster pays:
+//
+//	storage  ← single bucket, sized for cumulative archive
+//	PUTs     ← deduped to ONE writer's share regardless of fleet size
+//	GETs     ← N readers each pulling their share of archived data
+//	egress   ← only if readers live outside the backend's region
+type Cluster struct {
+	// Writers is the number of nodes producing new state. Used only
+	// for noting in the report; the PUT cost itself is independent
+	// of this once dedup is in place.
+	Writers int
+	// Readers is the number of read-only nodes pulling from the
+	// shared archive. Each contributes its own GET volume.
+	Readers int
+
+	// Underlying single-tier workload (per writer × dedup factor,
+	// or equivalently the chain-growth rate times the writer-share).
+	// In a deduped cluster this is just the chain's intrinsic growth.
+	Base Workload
+
+	// ReadsPerReaderRatio is each reader's fraction of the total GET
+	// volume relative to one full archive scan per month. 0 = no
+	// reads; 1 = one full re-read of the archive per reader per
+	// month; 12 = monthly re-reads per reader (very heavy).
+	ReadsPerReaderRatio float64
+
+	// EgressPerReaderGBPerMonth models the cross-region egress per
+	// reader. Set to 0 if all readers are in the backend's region.
+	EgressPerReaderGBPerMonth float64
+}
+
+// Workload returns the cluster's effective archive workload (single
+// backend bucket, all writers deduped, summed reader GETs + egress).
+func (c Cluster) Workload() Workload {
+	w := c.Base
+	w.GetsPerMonth = c.Base.PutsPerMonth * c.ReadsPerReaderRatio * float64(c.Readers)
+	w.EgressGBPerMonth = c.EgressPerReaderGBPerMonth * float64(c.Readers)
+	w.Description = fmt.Sprintf(
+		"cluster: %d writers (deduped to 1) + %d readers × %.2f read amp; %s",
+		c.Writers, c.Readers, c.ReadsPerReaderRatio, c.Base.Description,
+	)
+	return w
+}
+
+// BlockTimeWorkload constructs a Workload from a chain's block-rate
+// parameters. This is the generic primitive a chain-specific paper or
+// CLI composes; the package itself stays brand-neutral.
+//
+//	blockTime:        target time between blocks (e.g. 1s, 100ms, 1ms)
+//	avgBlockBytes:    average serialized block size on disk
+//	monthsRetained:   how long blocks are held before deletion
+//	readAmplification: GET/PUT ratio at steady state
+//	objectBytes:      the granularity each block is split into when
+//	                  written to the archive (e.g. 4096 for VFS 4 KiB
+//	                  blocks; equal to avgBlockBytes for one-PUT-per-
+//	                  block writers)
+//
+// Returns a workload that callers can feed to EstimateFor /
+// CompareBackends / Report, or wrap with Tiered / Cluster.
+func BlockTimeWorkload(blockTime time.Duration, avgBlockBytes int64, monthsRetained, readAmplification float64, objectBytes int64) Workload {
+	const secondsPerMonth = float64(time.Hour*24*30) / float64(time.Second)
+	blocksPerSec := 1.0 / blockTime.Seconds()
+	bytesPerSec := blocksPerSec * float64(avgBlockBytes)
+	bytesPerMonth := bytesPerSec * secondsPerMonth
+	storageBytes := bytesPerMonth * monthsRetained
+	objectsPerByte := 1.0 / float64(objectBytes)
+
+	return Workload{
+		StorageGB:    storageBytes / (1 << 30),
+		PutsPerMonth: bytesPerMonth * objectsPerByte,
+		GetsPerMonth: bytesPerMonth * objectsPerByte * readAmplification,
+		Description: fmt.Sprintf(
+			"block-time=%s, %d B/block, %d B/object, %.1f mo retention, %.1f read amp",
+			blockTime, avgBlockBytes, objectBytes, monthsRetained, readAmplification,
+		),
+	}
+}
