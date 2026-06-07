@@ -1,3 +1,5 @@
+//go:build cloud_mount
+
 // vfsd — HIP-0106 thin shim.
 //
 // Mounts pkg/vfs into a zip.App via the same Mount() the unified cloud

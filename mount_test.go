@@ -1,3 +1,5 @@
+//go:build cloud_mount
+
 package vfs_test
 
 import (
