@@ -1,3 +1,5 @@
+//go:build cloud_mount
+
 // HIP-0106 Mount() entry point. Lets cmd/cloud import this package and
 // register VFS with the shared zip.App alongside every other Hanzo
 // subsystem (iam, base, kms, amqp, …).
