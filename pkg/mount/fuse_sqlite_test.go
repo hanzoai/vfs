@@ -127,7 +127,7 @@ func TestFUSESQLite(t *testing.T) {
 			t.Fatalf("Prepare: %v", err)
 		}
 		for i := 0; i < 100; i++ {
-			if _, err := stmt.Exec(fmt.Sprintf("_%d", i), "Liquidity", 18); err != nil {
+			if _, err := stmt.Exec(fmt.Sprintf("USDC_%d", i), "USD Coin", 6); err != nil {
 				t.Fatalf("INSERT %d: %v", i, err)
 			}
 		}

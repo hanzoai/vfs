@@ -100,7 +100,7 @@ Same shape as `hanzo/replicate` — runs alongside Base/SQLite services:
 ```yaml
 spec:
   containers:
-    - name: 
+    - name: tenant-bd
       volumeMounts:
         - name: data
           mountPath: /data        # FUSE-mounted VFS
@@ -109,7 +109,7 @@ spec:
       args:
         - mount
         - /data
-        - --backend=s3://liquidity-vfs/{env}/bd
+        - --backend=s3://tenant-vfs/{env}/bd
         - --age-key=/etc/vfs/age.key
       securityContext:
         privileged: true       # FUSE needs CAP_SYS_ADMIN

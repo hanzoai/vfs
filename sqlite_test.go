@@ -64,8 +64,8 @@ func TestSQLiteRoundTrip(t *testing.T) {
 			sym, name string
 			dec       int
 		}{
-			{"", "Liquidity", 18},
-			{"USDL", "Liquid USD", 6},
+			{"USDC", "USD Coin", 6},
+			{"USDT", "Tether", 6},
 			{"BTC", "Bitcoin", 8},
 			{"ETH", "Ethereum", 18},
 		}
