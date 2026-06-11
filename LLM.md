@@ -4,7 +4,7 @@
 
 S3-backed virtual block filesystem. Local-NVMe hot tier + S3 (or any object
 store) cold tier with PQ encryption per block. Stateful services (IAM, BD,
-ATS, TA, KMS, onyxd, lqd snapshots) get unlimited disk via S3 without
+ATS, TA, KMS, lqd snapshots) get unlimited disk via S3 without
 needing K8s PVC sizing decisions.
 
 Companion to `~/work/hanzo/replicate` — `replicate` streams SQLite WAL
