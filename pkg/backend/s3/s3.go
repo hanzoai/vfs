@@ -16,6 +16,7 @@ import (
 
 	awsv2 "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
 	s3v2 "github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 
@@ -47,6 +48,28 @@ func openS3(ctx context.Context, u *url.URL) (backend.Backend, error) {
 		loadOpts = append(loadOpts, config.WithRegion(region))
 	}
 
+	// Static credentials for key-based S3 (MinIO, hanzoai/s3, R2) that don't
+	// use the AWS IAM/instance-profile chain. Accepted as URL userinfo
+	// (s3://ACCESS:SECRET@bucket/prefix) or as access_key/secret_key query
+	// params. Absent either, fall back to the AWS default credential chain
+	// (env, shared config, IMDS/IRSA).
+	accessKey, secretKey := "", ""
+	if u.User != nil {
+		accessKey = u.User.Username()
+		secretKey, _ = u.User.Password()
+	}
+	if v := u.Query().Get("access_key"); v != "" {
+		accessKey = v
+	}
+	if v := u.Query().Get("secret_key"); v != "" {
+		secretKey = v
+	}
+	if accessKey != "" && secretKey != "" {
+		loadOpts = append(loadOpts, config.WithCredentialsProvider(
+			credentials.NewStaticCredentialsProvider(accessKey, secretKey, u.Query().Get("session_token")),
+		))
+	}
+
 	cfg, err := config.LoadDefaultConfig(ctx, loadOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("s3 backend: load config: %w", err)
@@ -58,14 +81,31 @@ func openS3(ctx context.Context, u *url.URL) (backend.Backend, error) {
 			o.BaseEndpoint = awsv2.String(endpoint)
 			o.UsePathStyle = true
 		})
+	} else if u.Query().Get("force_path_style") == "true" {
+		clientOpts = append(clientOpts, func(o *s3v2.Options) {
+			o.UsePathStyle = true
+		})
 	}
 
 	cli := s3v2.NewFromConfig(cfg, clientOpts...)
+
+	// Redact any userinfo (access:secret) from the human-readable description
+	// so String()/logs never leak credentials.
+	redacted := *u
+	redacted.User = nil
+	q := redacted.Query()
+	for _, k := range []string{"access_key", "secret_key", "session_token"} {
+		if q.Has(k) {
+			q.Set(k, "REDACTED")
+		}
+	}
+	redacted.RawQuery = q.Encode()
+
 	return &s3Backend{
 		client: cli,
 		bucket: bucket,
 		prefix: prefix,
-		desc:   u.String(),
+		desc:   redacted.String(),
 	}, nil
 }
 
