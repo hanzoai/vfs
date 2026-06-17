@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: hanzo-build-linux-amd64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -35,7 +35,7 @@ jobs:
 
   build-amd64:
     needs: test
-    runs-on: ubuntu-latest
+    runs-on: hanzo-build-linux-amd64
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
@@ -57,7 +57,7 @@ jobs:
   image:
     needs: test
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
-    runs-on: ubuntu-latest
+    runs-on: hanzo-build-linux-amd64
     steps:
       - uses: actions/checkout@v4
       - name: login ghcr
