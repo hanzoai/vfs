@@ -6,6 +6,7 @@ require (
 	bazil.org/fuse v0.0.0-20230120002735-62a210ff1fd5
 	github.com/aws/aws-sdk-go-v2 v1.41.2
 	github.com/aws/aws-sdk-go-v2/config v1.32.8
+	github.com/aws/aws-sdk-go-v2/credentials v1.19.8
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.2
 	github.com/hanzoai/cloud v0.1.0
 	github.com/hanzoai/zip v0.2.0
@@ -18,10 +19,10 @@ require (
 )
 
 require (
+	filippo.io/age v1.3.1 // indirect
 	filippo.io/hpke v0.4.0 // indirect
 	github.com/andybalholm/brotli v1.2.1 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.5 // indirect
-	github.com/aws/aws-sdk-go-v2/credentials v1.19.8 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.17 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.18 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.18 // indirect
