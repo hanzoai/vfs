@@ -1,3 +1,5 @@
+<p align="center"><img src=".github/hero.svg" alt="vfs" width="880"></p>
+
 # vfs
 
 Object-store abstraction with content-addressed, PQ-encrypted block storage. The storage backplane for HIP-0107 streaming replication.
