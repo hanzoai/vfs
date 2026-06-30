@@ -61,6 +61,8 @@ github.com/kylelemons/godebug v1.1.0 h1:RPNrshWIDI6G2gRW9EHilWtl7Z6Sb1BR0xunSBf0
 github.com/kylelemons/godebug v1.1.0/go.mod h1:9/0rRGxNHcop5bhtWyNeEfOS8JIWk580+fNqagV/RAw=
 github.com/luxfi/age v1.5.0 h1:G69HbSV4R3vKEH9B0CulnRaMdSdf4RalMgP8xKmxHeI=
 github.com/luxfi/age v1.5.0/go.mod h1:iAYAxgvrXxcy746+Ovh/eWWDuF9teJLNcCSSOX9RYW0=
+github.com/luxfi/age v1.6.0 h1:KMD8gSOP4NVCb7NWSlRcgBZNV2xm2a+qQWPyPmiX6f4=
+github.com/luxfi/age v1.6.0/go.mod h1:7cu9CIyikgyAvr5MlXFapEDQ15yBaHOSdKkK5lG04WE=
 github.com/mattn/go-isatty v0.0.21 h1:xYae+lCNBP7QuW4PUnNG61ffM4hVIfm+zUzDuSzYLGs=
 github.com/mattn/go-isatty v0.0.21/go.mod h1:ZXfXG4SQHsB/w3ZeOYbR0PrPwLy+n6xiMrJlRFqopa4=
 github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOFAw7w=

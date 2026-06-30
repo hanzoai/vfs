@@ -8,7 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.8
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.2
 	github.com/jacobsa/fuse v0.0.0-20260302145937-f1ba38d60fdf
-	github.com/luxfi/age v1.5.0
+	github.com/luxfi/age v1.6.0
 	github.com/spf13/cobra v1.10.2
 	github.com/zeebo/blake3 v0.2.4
 	modernc.org/sqlite v1.50.0
