@@ -1,5 +1,3 @@
-//go:build cloud_mount
-
 // HIP-0106 Mount() entry point. Lets cmd/cloud import this package and
 // register VFS with the shared zip.App alongside every other Hanzo
 // subsystem (iam, base, kms, amqp, …).
@@ -32,7 +30,7 @@ import (
 
 	"github.com/hanzoai/cloud"
 	"github.com/hanzoai/vfs/pkg/backend"
-	"github.com/hanzoai/zip"
+	"github.com/zap-proto/zip"
 )
 
 // Version is overridden at build time via -ldflags

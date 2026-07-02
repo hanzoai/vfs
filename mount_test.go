@@ -1,5 +1,3 @@
-//go:build cloud_mount
-
 package vfs_test
 
 import (
@@ -18,7 +16,7 @@ import (
 	"github.com/hanzoai/vfs/pkg/backend"
 	_ "github.com/hanzoai/vfs/pkg/backend/file"
 	"github.com/hanzoai/vfs"
-	"github.com/hanzoai/zip"
+	"github.com/zap-proto/zip"
 )
 
 // newMountTestVFS creates a file-backed VFS suitable for HTTP testing.
