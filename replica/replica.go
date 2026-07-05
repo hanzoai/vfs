@@ -183,9 +183,14 @@ func (r *Replicator) PushLoop(ctx context.Context, every time.Duration) {
 	}
 }
 
-// version is the content hash used to skip redundant pulls — SHA-256 of the
-// snapshot bytes, matching hanzoai/vfs's content-addressable model.
-func version(data []byte) string {
+// Version is the canonical content version for a snapshot — SHA-256 of the bytes,
+// matching hanzoai/vfs's content-addressable model. Exported so any Store impl
+// (cloud's deps.VFS-backed store, the BackendStore) computes the SAME version the
+// Replicator's skip-redundant-pull logic expects — one hash function, one place.
+func Version(data []byte) string {
 	h := sha256.Sum256(data)
 	return hex.EncodeToString(h[:])
 }
+
+// version is the internal alias used across this package.
+func version(data []byte) string { return Version(data) }
