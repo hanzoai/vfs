@@ -76,13 +76,31 @@ func (s *SQLiteDB) DB() *sql.DB {
 }
 
 // Snapshot returns a consistent, WAL-checkpointed copy of the whole database as
-// bytes, via `VACUUM INTO` a temp file. Concurrent with ongoing reads/writes.
+// bytes. Concurrent with ongoing reads/writes.
 func (s *SQLiteDB) Snapshot(ctx context.Context) ([]byte, error) {
 	s.mu.RLock()
 	db := s.db
 	s.mu.RUnlock()
+	return snapshotConn(ctx, db, filepath.Dir(s.path))
+}
 
-	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".snap-*.db")
+// SnapshotFile returns a consistent snapshot of the SQLite database at path
+// WITHOUT holding a persistent handle — the adoption primitive for a service that
+// manages the DB with its OWN library (xorm, GORM, …): open a transient read
+// handle, VACUUM INTO a temp, return the bytes. In WAL mode the transient handle
+// sees all committed data, so this is consistent even while the service writes.
+func SnapshotFile(ctx context.Context, path string) ([]byte, error) {
+	db, err := sql.Open("sqlite", path+sqlitePragmas)
+	if err != nil {
+		return nil, fmt.Errorf("replica: snapshot open %s: %w", path, err)
+	}
+	defer db.Close()
+	return snapshotConn(ctx, db, filepath.Dir(path))
+}
+
+// snapshotConn is the shared VACUUM-INTO core (one and one way).
+func snapshotConn(ctx context.Context, db *sql.DB, dir string) ([]byte, error) {
+	tmp, err := os.CreateTemp(dir, ".snap-*.db")
 	if err != nil {
 		return nil, fmt.Errorf("replica: snapshot temp: %w", err)
 	}
@@ -101,6 +119,29 @@ func (s *SQLiteDB) Snapshot(ctx context.Context) ([]byte, error) {
 	return data, nil
 }
 
+// RestoreFile atomically writes snapshot bytes over the SQLite database at path —
+// the handle-less adoption primitive. The caller MUST have no open handle to path
+// (close the service's engine first; reopen after). Drops the -wal/-shm sidecars
+// so a reopen can't replay stale WAL over the restored file. Used at hydrate-on-open,
+// BEFORE the service opens its own engine.
+func RestoreFile(path string, data []byte) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("replica: restore dir %s: %w", filepath.Dir(path), err)
+	}
+	tmpPath := path + ".restore"
+	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+		return fmt.Errorf("replica: write restore temp: %w", err)
+	}
+	for _, side := range []string{"-wal", "-shm"} {
+		_ = os.Remove(path + side)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("replica: rename restore over %s: %w", path, err)
+	}
+	return nil
+}
+
 // Restore atomically replaces the local database with data and reopens the
 // handle. Exclusive: it closes the live handle, renames the new file over the
 // old, and reopens. On any failure the previous DB is left intact and the handle
@@ -109,23 +150,14 @@ func (s *SQLiteDB) Restore(ctx context.Context, data []byte) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	tmpPath := s.path + ".restore"
-	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
-		return fmt.Errorf("replica: write restore temp: %w", err)
-	}
-	// Drop the WAL/SHM sidecars of the OLD db so a reopen can't replay stale WAL
-	// over the freshly restored file.
+	// Close our handle, swap the file via the shared primitive, reopen.
 	if err := s.db.Close(); err != nil {
-		os.Remove(tmpPath)
 		return fmt.Errorf("replica: close for restore: %w", err)
 	}
-	for _, side := range []string{"-wal", "-shm"} {
-		_ = os.Remove(s.path + side)
-	}
-	if err := os.Rename(tmpPath, s.path); err != nil {
-		// Rename failed — reopen the original so the service still has a DB.
+	if err := RestoreFile(s.path, data); err != nil {
+		// Reopen the original so the service still has a DB.
 		s.db, _ = sql.Open("sqlite", s.path+sqlitePragmas)
-		return fmt.Errorf("replica: rename restore over %s: %w", s.path, err)
+		return err
 	}
 	db, err := sql.Open("sqlite", s.path+sqlitePragmas)
 	if err != nil {
