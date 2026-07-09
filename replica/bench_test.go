@@ -100,16 +100,3 @@ func BenchmarkPushPull(b *testing.B) {
 		})
 	}
 }
-
-// BenchmarkOwnerElection measures the per-write HRW single-writer check (the hot path
-// gating every write when scaled to N replicas).
-func BenchmarkOwnerElection(b *testing.B) {
-	members := make([]Member, 16)
-	for i := range members {
-		members[i] = Member{ID: fmt.Sprintf("replica-%02d", i)}
-	}
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		_ = IsOwner("some-org-slug", "replica-07", members)
-	}
-}
