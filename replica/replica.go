@@ -15,8 +15,9 @@
 // per-org store seam:
 //
 //	hydrate-on-open : Pull() the latest snapshot before first use of an org DB.
-//	single-writer   : IsOwner(org, self, members) gates writes; a non-owner serves
-//	                  stale-tolerant reads (Pull-then-read) and forwards writes.
+//	single-writer   : ha.IsOwner(key, self, members) gates writes (github.com/hanzoai/ha,
+//	                  the election primitive); a non-owner serves stale-tolerant reads
+//	                  (Pull-then-read) and forwards writes.
 //	post-commit ship: the owner runs PushLoop (or Push after a write burst); the
 //	                  durable copy in vfs means a lost pod loses no committed data.
 package replica
