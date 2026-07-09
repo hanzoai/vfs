@@ -11,6 +11,27 @@ Companion to `~/work/hanzo/replicate` — `replicate` streams SQLite WAL
 frames to S3 (file-level granularity); `vfs` is block-level granularity
 that transparently spills cold pages.
 
+## `replica/` subpackage — HA-SQLite substrate (HIP-0107)
+
+`github.com/hanzoai/vfs/replica` is the shared per-org SQLite HA substrate:
+local SQLite for speed, snapshot replication to the object store, hydrate-on-open,
+single-writer gated by `github.com/hanzoai/ha` election. `Replicator` (Push/Pull),
+`DB` (Snapshot/Restore), `Store`, `DBPath`.
+
+**Fencing (`replica/fence.go`, since v0.6.3)** — election alone is coordination-free,
+so two replicas with divergent membership views can each elect themselves writer for
+one org (split-brain) and unconditional `Store.Put` lets both overwrite the mirror.
+`FencedStore` closes this over a `ConditionalStore` (S3 If-Match / GCS
+generation-match) CAS: one object per key carries a monotone round header, admitted
+iff `round >= recorded`, rejected (`ErrStaleRound`) when below — so a deposed writer's
+ship is refused once a successor advanced the round. `Put(key,data,round)` ships;
+`CarryForward(key,round,hydrate)` is the safe takeover seal (re-reads + carries the
+predecessor's last landed write forward atomically via CAS, so no acknowledged write
+is lost); `Get`/`Round` read. Round is a plain `uint64` (the storage boundary value);
+the coordination value `ha.Lease{Owner,Round}` and the round SOURCE live in `ha` and
+its consumers, never here. The concrete `ConditionalStore` (minio If-Match) lives with
+the S3-client owner (cloud); this package stays dependency-free over the seam.
+
 ## Architecture
 
 ```
