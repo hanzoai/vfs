@@ -20,10 +20,14 @@ jobs:
         with:
           go-version: '1.26.4'
           cache: true
+      - name: install cgo toolchain (the -race detector requires a C compiler)
+        run: sudo apt-get update && sudo apt-get install -y gcc
       - name: vet
         run: go vet ./...
       - name: test (default)
         run: go test -race ./...
+        env:
+          CGO_ENABLED: "1" # the race detector requires cgo; production build stays CGO_ENABLED=0 (line below)
       - name: vet (fuse)
         run: go vet -tags fuse ./...
       - name: install fuse
@@ -32,6 +36,8 @@ jobs:
         run: go build -tags fuse ./...
       - name: test (fuse + sqlite e2e)
         run: VFS_FUSE_E2E=1 go test -race -tags fuse -run TestFUSESQLite ./pkg/mount/ -v
+        env:
+          CGO_ENABLED: "1" # -race + fuse bindings both require cgo
 
   build-amd64:
     needs: test
