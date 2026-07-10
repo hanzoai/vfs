@@ -6,7 +6,8 @@
 // the database survived the round trip.
 //
 // Run with:
-//   VFS_FUSE_E2E=1 go test -tags fuse -run TestFUSESQLite ./pkg/mount/
+//
+//	VFS_FUSE_E2E=1 go test -tags fuse -run TestFUSESQLite ./pkg/mount/
 //
 // Linux: requires kernel ≥ 3.10 with FUSE support (default on every
 // modern distro).
@@ -27,13 +28,13 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/hanzoai/sqlite"
 	"github.com/luxfi/age"
-	_ "modernc.org/sqlite"
 
+	"github.com/hanzoai/vfs"
 	"github.com/hanzoai/vfs/pkg/backend"
 	_ "github.com/hanzoai/vfs/pkg/backend/file"
 	"github.com/hanzoai/vfs/pkg/mount"
-	"github.com/hanzoai/vfs"
 )
 
 func TestFUSESQLite(t *testing.T) {
