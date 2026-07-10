@@ -35,12 +35,12 @@ import (
 	"strings"
 	"testing"
 
+	_ "github.com/hanzoai/sqlite"
 	"github.com/luxfi/age"
-	_ "modernc.org/sqlite"
 
+	"github.com/hanzoai/vfs"
 	"github.com/hanzoai/vfs/pkg/backend"
 	_ "github.com/hanzoai/vfs/pkg/backend/file"
-	"github.com/hanzoai/vfs"
 )
 
 func TestSQLiteRoundTrip(t *testing.T) {

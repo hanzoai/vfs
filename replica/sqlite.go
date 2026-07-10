@@ -27,7 +27,7 @@ import (
 	"path/filepath"
 	"sync"
 
-	_ "modernc.org/sqlite" // CGO-free sqlite driver ("sqlite")
+	_ "github.com/hanzoai/sqlite" // CGO-free sqlite driver ("sqlite")
 )
 
 // sqlitePragmas is the durability profile every Hanzo per-org SQLite opens with
