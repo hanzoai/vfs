@@ -12,7 +12,6 @@ require (
 	github.com/luxfi/age v1.6.0
 	github.com/spf13/cobra v1.10.2
 	github.com/zeebo/blake3 v0.2.4
-	modernc.org/sqlite v1.50.0
 )
 
 require (
@@ -49,4 +48,5 @@ require (
 	modernc.org/libc v1.72.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
+	modernc.org/sqlite v1.50.0 // indirect
 )
