@@ -8,7 +8,7 @@ package replica
 // SQLiteDB is the real per-org SQLite DB handle the Replicator snapshots and
 // restores — the piece that makes HA SQLite work for EVERY Hanzo service (the
 // cloud replicator only ever exercised an in-memory test double). CGO-free
-// (modernc.org/sqlite), so it builds under CGO_ENABLED=0 like the rest of the
+// (hanzoai/sqlite), so it builds under CGO_ENABLED=0 like the rest of the
 // stack.
 //
 // Snapshot is consistent: `VACUUM INTO` a temp file forces a WAL checkpoint and
@@ -58,7 +58,7 @@ func OpenSQLite(path string) (*SQLiteDB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("replica: sqlite open %s: %w", path, err)
 	}
-	// modernc opens lazily; force a connection so a bad path fails here, not later.
+	// The driver opens lazily; force a connection so a bad path fails here, not later.
 	if err := db.Ping(); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("replica: sqlite ping %s: %w", path, err)
