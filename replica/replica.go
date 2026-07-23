@@ -33,7 +33,7 @@ import (
 )
 
 // Store is the object-store surface the Replicator needs — satisfied natively by
-// hanzoai/vfs (SeaweedFS-backed, in-process). NO minio, NO external S3 SDK.
+// hanzoai/vfs (SeaweedFS-backed, in-process). NO third-party S3 SDK.
 // version is a content hash so readers skip redundant pulls.
 type Store interface {
 	Put(ctx context.Context, key string, data []byte) error

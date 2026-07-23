@@ -1,6 +1,6 @@
 // Package s3 is an AWS S3 / S3-compatible Backend.
 //
-// Endpoint override (R2, Hanzo Storage, MinIO) via AWS_ENDPOINT_URL or
+// Endpoint override (R2, Hanzo Storage, SeaweedFS) via AWS_ENDPOINT_URL or
 // the URL's `endpoint` query parameter.
 package s3
 

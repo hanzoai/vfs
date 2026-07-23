@@ -72,7 +72,7 @@ var ErrNotImplemented = errors.New("backend: operation not implemented")
 // schemes:
 //
 //	file://path           — local filesystem (dev only)
-//	s3://bucket/prefix    — AWS S3 / S3-compatible (R2, Hanzo Storage, MinIO)
+//	s3://bucket/prefix    — AWS S3 / S3-compatible (R2, Hanzo Storage, SeaweedFS)
 //	gcs://bucket/prefix   — Google Cloud Storage (TODO)
 //	azureblob://...       — Azure Blob (TODO)
 //
