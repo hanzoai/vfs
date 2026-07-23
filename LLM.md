@@ -29,7 +29,7 @@ ship is refused once a successor advanced the round. `Put(key,data,round)` ships
 predecessor's last landed write forward atomically via CAS, so no acknowledged write
 is lost); `Get`/`Round` read. Round is a plain `uint64` (the storage boundary value);
 the coordination value `ha.Lease{Owner,Round}` and the round SOURCE live in `ha` and
-its consumers, never here. The concrete `ConditionalStore` (minio If-Match) lives with
+its consumers, never here. The concrete `ConditionalStore` (hanzoai/s3 If-Match) lives with
 the S3-client owner (cloud); this package stays dependency-free over the seam.
 
 ## Architecture
@@ -165,7 +165,7 @@ spec:
 | Scheme | Form | Notes |
 |---|---|---|
 | `file://` | `file:///tmp/store` | Local dev; no network. |
-| `s3://` | `s3://bucket/prefix` | Region from `AWS_REGION` env or IRSA. Endpoint override via `AWS_ENDPOINT_URL` for S3-compat (Hanzo Storage, MinIO, R2). |
+| `s3://` | `s3://bucket/prefix` | Region from `AWS_REGION` env or IRSA. Endpoint override via `AWS_ENDPOINT_URL` for S3-compat (Hanzo Storage, SeaweedFS, R2). |
 | `gcs://` | `gcs://bucket/prefix` | (TODO) |
 | `azureblob://` | `azureblob://account/container/prefix` | (TODO) |
 
