@@ -85,7 +85,7 @@ const maxCASAttempts = 8
 // "Get, compare in Go, then Put" is NOT a valid implementation — that
 // non-atomicity is the exact race this fence exists to close. The concrete
 // implementation lives with the caller that owns an S3/SeaweedFS client (e.g.
-// cloud's minio-go If-Match store); this package stays dependency-free over the
+// cloud's hanzoai/s3-go If-Match store); this package stays dependency-free over the
 // seam, and the in-memory fake in fence_test.go models the same server-side CAS.
 type ConditionalStore interface {
 	// Get returns the object bytes and the store's authoritative version token
