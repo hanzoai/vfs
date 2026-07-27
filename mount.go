@@ -32,7 +32,7 @@ import (
 
 	"github.com/hanzoai/cloud"
 	"github.com/hanzoai/vfs/pkg/backend"
-	"github.com/hanzoai/zip"
+	"github.com/zap-proto/zip"
 )
 
 // Version is overridden at build time via -ldflags
