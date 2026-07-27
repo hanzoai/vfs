@@ -27,12 +27,12 @@ import (
 	"github.com/luxfi/log"
 
 	"github.com/hanzoai/cloud"
+	"github.com/hanzoai/vfs"
 	"github.com/hanzoai/vfs/pkg/backend"
 	_ "github.com/hanzoai/vfs/pkg/backend/file"
 	_ "github.com/hanzoai/vfs/pkg/backend/s3"
-	"github.com/hanzoai/vfs"
-	"github.com/hanzoai/zip"
-	"github.com/hanzoai/zip/middleware"
+	"github.com/zap-proto/zip"
+	"github.com/zap-proto/zip/middleware"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".

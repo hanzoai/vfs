@@ -15,10 +15,10 @@ import (
 	luxlog "github.com/luxfi/log"
 
 	"github.com/hanzoai/cloud"
+	"github.com/hanzoai/vfs"
 	"github.com/hanzoai/vfs/pkg/backend"
 	_ "github.com/hanzoai/vfs/pkg/backend/file"
-	"github.com/hanzoai/vfs"
-	"github.com/hanzoai/zip"
+	"github.com/zap-proto/zip"
 )
 
 // newMountTestVFS creates a file-backed VFS suitable for HTTP testing.
