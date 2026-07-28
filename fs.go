@@ -36,8 +36,8 @@ type Inode struct {
 	ID       InodeID            `json:"id"`
 	Name     string             `json:"name,omitempty"`
 	Parent   InodeID            `json:"parent,omitempty"`
-	Mode     uint32             `json:"mode"`     // POSIX mode bits
-	Size     uint64             `json:"size"`     // exact bytes
+	Mode     uint32             `json:"mode"` // POSIX mode bits
+	Size     uint64             `json:"size"` // exact bytes
 	Mtime    time.Time          `json:"mtime"`
 	Atime    time.Time          `json:"atime"`
 	Ctime    time.Time          `json:"ctime"`

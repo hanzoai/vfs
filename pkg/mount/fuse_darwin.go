@@ -37,11 +37,11 @@ func Mount(ctx context.Context, fs *vfs.FS, mountpoint string) error {
 	}
 	srv := newServer(ctx, fs)
 	mfs, err := fuse.Mount(mountpoint, fuseutil.NewFileSystemServer(srv), &fuse.MountConfig{
-		FSName:                  "vfs",
-		Subtype:                 "hanzovfs",
-		ReadOnly:                false,
-		EnableNoOpenSupport:     true,
-		EnableNoOpendirSupport:  true,
+		FSName:                    "vfs",
+		Subtype:                   "hanzovfs",
+		ReadOnly:                  false,
+		EnableNoOpenSupport:       true,
+		EnableNoOpendirSupport:    true,
 		DisableDefaultPermissions: false,
 	})
 	if err != nil {

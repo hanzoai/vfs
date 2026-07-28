@@ -4,18 +4,18 @@
 // Covers the four code-level concerns that gate "can we mount VFS at
 // /data/db and walk away":
 //
-//   #1 crash/restart recovery  — mid-write process death + reopen,
-//                                verify FS view is consistent.
-//   #4 compaction under load   — sustained write pattern matching
-//                                zapdb compaction (many small files,
-//                                frequent fsync, occasional bulk rewrite).
-//   #5 backend outage          — inject Put/Get errors and verify the
-//                                FS surfaces them rather than hanging or
-//                                silently losing data.
-//   #6 key rotation            — confirm Crypto accepts a multi-recipient
-//                                list (rolling rotation viable) and that
-//                                a single Get round-trip still works after
-//                                a recipient is added or removed.
+//	#1 crash/restart recovery  — mid-write process death + reopen,
+//	                             verify FS view is consistent.
+//	#4 compaction under load   — sustained write pattern matching
+//	                             zapdb compaction (many small files,
+//	                             frequent fsync, occasional bulk rewrite).
+//	#5 backend outage          — inject Put/Get errors and verify the
+//	                             FS surfaces them rather than hanging or
+//	                             silently losing data.
+//	#6 key rotation            — confirm Crypto accepts a multi-recipient
+//	                             list (rolling rotation viable) and that
+//	                             a single Get round-trip still works after
+//	                             a recipient is added or removed.
 //
 // The three operational concerns — empty-cache bootstrap timing,
 // warm-cache bootstrap timing, and rollback path to PVC-local state —

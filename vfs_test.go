@@ -7,9 +7,9 @@ import (
 
 	"github.com/luxfi/age"
 
+	"github.com/hanzoai/vfs"
 	"github.com/hanzoai/vfs/pkg/backend"
 	_ "github.com/hanzoai/vfs/pkg/backend/file"
-	"github.com/hanzoai/vfs"
 )
 
 func newRoundTripVFS(t *testing.T) *vfs.VFS {
