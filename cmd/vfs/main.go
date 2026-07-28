@@ -13,11 +13,11 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/hanzoai/vfs"
 	"github.com/hanzoai/vfs/pkg/backend"
 	_ "github.com/hanzoai/vfs/pkg/backend/file" // registers file://
 	_ "github.com/hanzoai/vfs/pkg/backend/s3"   // registers s3://
 	"github.com/hanzoai/vfs/pkg/mount"
-	"github.com/hanzoai/vfs"
 
 	"github.com/luxfi/age"
 )
@@ -35,10 +35,10 @@ func main() {
 	}
 
 	var (
-		backendURL  string
-		ageRecips   []string
-		ageKeyPath  string
-		cacheMax    int64
+		backendURL string
+		ageRecips  []string
+		ageKeyPath string
+		cacheMax   int64
 	)
 
 	root.PersistentFlags().StringVar(&backendURL, "backend", "", "backend URL (file://path, s3://bucket/prefix)")
