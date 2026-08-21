@@ -27,13 +27,17 @@ import (
 	"path/filepath"
 	"sync"
 
-	_ "github.com/hanzoai/sqlite" // CGO-free sqlite driver ("sqlite")
+	"github.com/hanzoai/sqlite"
 )
 
-// sqlitePragmas is the durability profile every Hanzo per-org SQLite opens with
-// (WAL, NORMAL sync, foreign keys, a generous busy timeout) — the same profile
-// hanzoai/base + visor apply, so one on-disk convention everywhere.
-const sqlitePragmas = "?_pragma=busy_timeout(10000)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=foreign_keys(ON)"
+// dsn addresses path with the durability profile every Hanzo per-org SQLite
+// opens with (WAL, NORMAL sync, foreign keys, a generous busy timeout), so there
+// is one on-disk convention everywhere.
+//
+// The driver builds it. The two backends spell a pragma differently in a DSN and
+// each ignores the other's spelling silently, so a hand-written profile applies
+// on one build and evaporates on the other.
+func dsn(path string) string { return sqlite.PragmaDSN(path, sqlite.DefaultPragmas) }
 
 // SQLiteDB is a Replicator DB backed by an on-disk SQLite file. It owns the sole
 // *sql.DB handle to that path; Restore swaps the file underneath it. Safe for
@@ -54,7 +58,7 @@ func OpenSQLite(path string) (*SQLiteDB, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("replica: sqlite dir %s: %w", filepath.Dir(path), err)
 	}
-	db, err := sql.Open("sqlite", path+sqlitePragmas)
+	db, err := sql.Open("sqlite", dsn(path))
 	if err != nil {
 		return nil, fmt.Errorf("replica: sqlite open %s: %w", path, err)
 	}
@@ -90,7 +94,7 @@ func (s *SQLiteDB) Snapshot(ctx context.Context) ([]byte, error) {
 // handle, VACUUM INTO a temp, return the bytes. In WAL mode the transient handle
 // sees all committed data, so this is consistent even while the service writes.
 func SnapshotFile(ctx context.Context, path string) ([]byte, error) {
-	db, err := sql.Open("sqlite", path+sqlitePragmas)
+	db, err := sql.Open("sqlite", dsn(path))
 	if err != nil {
 		return nil, fmt.Errorf("replica: snapshot open %s: %w", path, err)
 	}
@@ -156,10 +160,10 @@ func (s *SQLiteDB) Restore(ctx context.Context, data []byte) error {
 	}
 	if err := RestoreFile(s.path, data); err != nil {
 		// Reopen the original so the service still has a DB.
-		s.db, _ = sql.Open("sqlite", s.path+sqlitePragmas)
+		s.db, _ = sql.Open("sqlite", dsn(s.path))
 		return err
 	}
-	db, err := sql.Open("sqlite", s.path+sqlitePragmas)
+	db, err := sql.Open("sqlite", dsn(s.path))
 	if err != nil {
 		return fmt.Errorf("replica: reopen after restore: %w", err)
 	}
