@@ -1,6 +1,6 @@
 module github.com/hanzoai/vfs
 
-go 1.26.5
+go 1.26.8
 
 require (
 	bazil.org/fuse v0.0.0-20230120002735-62a210ff1fd5
