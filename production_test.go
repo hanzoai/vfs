@@ -96,7 +96,7 @@ func TestCrashRecovery_Synced_Persists(t *testing.T) {
 	payloads := make([][]byte, N)
 	{
 		fs, _ := buildFS(t, dir, id)
-		for i := 0; i < N; i++ {
+		for i := range N {
 			name := fmt.Sprintf("/file-%d.db", i)
 			if _, err := fs.Create(name, 0o644); err != nil {
 				t.Fatalf("Create %s: %v", name, err)
@@ -127,7 +127,7 @@ func TestCrashRecovery_Synced_Persists(t *testing.T) {
 
 	// Round 2: reopen + verify byte-equal reads + correct sizes.
 	fs2, _ := buildFS(t, dir, id)
-	for i := 0; i < N; i++ {
+	for i := range N {
 		name := fmt.Sprintf("/file-%d.db", i)
 		f, err := fs2.Open(context.Background(), name)
 		if err != nil {
@@ -269,7 +269,7 @@ func TestCompaction_SustainedWrite(t *testing.T) {
 	// LSM simulation.
 	const numFiles = 16
 	files := make([]*vfs.File, 0, numFiles)
-	for i := 0; i < numFiles; i++ {
+	for i := range numFiles {
 		name := fmt.Sprintf("/sst-%03d.dat", i)
 		if _, err := fs.Create(name, 0o644); err != nil {
 			t.Fatalf("Create %s: %v", name, err)

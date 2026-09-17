@@ -22,7 +22,7 @@ func TestCacheBasic(t *testing.T) {
 func TestCacheLRUEviction(t *testing.T) {
 	// Cap at 100 bytes; 4 entries × 50 bytes each → first two evict.
 	c := NewCache(100)
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		id := BlockID(strings.Repeat(string(rune('a'+i)), 64))
 		c.Put(id, make([]byte, 50))
 	}

@@ -147,7 +147,7 @@ func (f *FencedStore) Put(ctx context.Context, key string, payload []byte, round
 		return fmt.Errorf("replica: fenced put requires a key")
 	}
 	var lastErr error
-	for attempt := 0; attempt < maxCASAttempts; attempt++ {
+	for range maxCASAttempts {
 		recorded, version, err := f.current(ctx, key)
 		if err != nil {
 			return err
@@ -194,7 +194,7 @@ func (f *FencedStore) CarryForward(ctx context.Context, key string, round uint64
 		return fmt.Errorf("replica: carry-forward requires a key")
 	}
 	var lastErr error
-	for attempt := 0; attempt < maxCASAttempts; attempt++ {
+	for range maxCASAttempts {
 		data, version, err := f.store.Get(ctx, key)
 		var recorded uint64
 		var payload []byte

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path"
 	"strings"
@@ -172,7 +173,7 @@ func (fs *FS) Lookup(p string) (*Inode, error) {
 	if p == "/" {
 		return cloneInode(cur), nil
 	}
-	for _, seg := range strings.Split(strings.TrimPrefix(p, "/"), "/") {
+	for seg := range strings.SplitSeq(strings.TrimPrefix(p, "/"), "/") {
 		if seg == "" {
 			continue
 		}
@@ -366,9 +367,7 @@ func cloneInode(src *Inode) *Inode {
 	cp := *src
 	if src.Children != nil {
 		cp.Children = make(map[string]InodeID, len(src.Children))
-		for k, v := range src.Children {
-			cp.Children[k] = v
-		}
+		maps.Copy(cp.Children, src.Children)
 	}
 	if src.Blocks != nil {
 		cp.Blocks = append([]BlockID(nil), src.Blocks...)

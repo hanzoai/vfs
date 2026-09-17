@@ -161,8 +161,7 @@ func TestFencedPutConcurrentSameRoundOwnerReship(t *testing.T) {
 	results := make([]error, 2)
 	var wg sync.WaitGroup
 	wg.Add(2)
-	for i := 0; i < 2; i++ {
-		i := i
+	for i := range 2 {
 		go func() {
 			defer wg.Done()
 			results[i] = f.Put(context.Background(), "orgs/acme/kv.db", []byte(fmt.Sprintf("payload-%d", i)), 7)
@@ -202,15 +201,12 @@ func TestFencedPutConcurrentHigherVsLower(t *testing.T) {
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 	for _, round := range []uint64{5, 6} { // 5 = fenced minority, 6 = majority successor.
-		round := round
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			err := f.Put(context.Background(), "orgs/acme/kv.db", []byte(fmt.Sprintf("round-%d", round)), round)
 			mu.Lock()
 			results[round] = err
 			mu.Unlock()
-		}()
+		})
 	}
 	wg.Wait()
 
@@ -319,8 +315,7 @@ func TestFencedPutCreateOnlyFirstWrite(t *testing.T) {
 	results := make([]error, 2)
 	var wg sync.WaitGroup
 	wg.Add(2)
-	for i := 0; i < 2; i++ {
-		i := i
+	for i := range 2 {
 		go func() {
 			defer wg.Done()
 			results[i] = f.Put(context.Background(), "orgs/new/kv.db", []byte(fmt.Sprintf("first-%d", i)), 1)

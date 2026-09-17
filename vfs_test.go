@@ -101,7 +101,7 @@ func TestRoundTripDeduplicates(t *testing.T) {
 func TestStats(t *testing.T) {
 	v := newRoundTripVFS(t)
 	ctx := context.Background()
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		if _, err := v.PutBlock(ctx, []byte{byte(i)}); err != nil {
 			t.Fatalf("PutBlock: %v", err)
 		}

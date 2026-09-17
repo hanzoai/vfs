@@ -27,7 +27,7 @@ func seedDB(b *testing.B, path string, rows int) *SQLiteDB {
 		b.Fatalf("create: %v", err)
 	}
 	tx, _ := db.DB().Begin()
-	for i := 0; i < rows; i++ {
+	for i := range rows {
 		if _, err := tx.Exec(`INSERT INTO kv(k,v) VALUES(?,?)`, i, fmt.Sprintf("row-%d-payload-data-padding", i)); err != nil {
 			b.Fatalf("insert: %v", err)
 		}

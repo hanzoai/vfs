@@ -69,7 +69,7 @@ func TestSQLiteRoundTrip(t *testing.T) {
 			{"BTC", "Bitcoin", 8},
 			{"ETH", "Ethereum", 18},
 		}
-		for i := 0; i < 200; i++ {
+		for i := range 200 {
 			r := rows[i%len(rows)]
 			if _, err := stmt.Exec(fmt.Sprintf("%s_%d", r.sym, i), r.name, r.dec); err != nil {
 				t.Fatalf("INSERT: %v", err)
@@ -132,14 +132,8 @@ func TestSQLiteRoundTrip(t *testing.T) {
 		// Find first divergence to localise the bug
 		for i := range refBytes {
 			if buf[i] != refBytes[i] {
-				start := i - 16
-				if start < 0 {
-					start = 0
-				}
-				end := i + 16
-				if end > len(refBytes) {
-					end = len(refBytes)
-				}
+				start := max(i-16, 0)
+				end := min(i+16, len(refBytes))
 				t.Fatalf("byte mismatch at offset %d (block %d, off %d): vfs=% x ref=% x",
 					i, i/vfs.BlockSize, i%vfs.BlockSize, buf[start:end], refBytes[start:end])
 			}

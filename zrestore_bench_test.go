@@ -50,7 +50,7 @@ func TestZChunkRestore(t *testing.T) {
 
 	wv, _ := New(Config{Backend: be, Crypto: crypto, CacheMax: 1 << 30})
 	ids := make([]BlockID, nBlocks)
-	for i := 0; i < nBlocks; i++ {
+	for i := range nBlocks {
 		pt[0], pt[1], pt[2] = byte(i), byte(i>>8), byte(i>>16)
 		bid, err := wv.PutBlock(ctx, pt)
 		if err != nil {
@@ -70,7 +70,7 @@ func TestZChunkRestore(t *testing.T) {
 	// warm OS page cache so file reads are RAM-fast (isolate crypto CPU)
 	{
 		v := freshVFS()
-		for i := 0; i < nBlocks; i++ {
+		for i := range nBlocks {
 			if _, err := v.GetBlock(ctx, ids[i]); err != nil {
 				t.Fatal(err)
 			}
@@ -83,7 +83,7 @@ func TestZChunkRestore(t *testing.T) {
 	seq := func() float64 {
 		v := freshVFS()
 		t0 := time.Now()
-		for i := 0; i < nBlocks; i++ {
+		for i := range nBlocks {
 			if _, err := v.GetBlock(ctx, ids[i]); err != nil {
 				t.Fatal(err)
 			}
@@ -102,10 +102,8 @@ func TestZChunkRestore(t *testing.T) {
 		var idx int64 = -1
 		var wg sync.WaitGroup
 		t0 := time.Now()
-		for w := 0; w < workers; w++ {
-			wg.Add(1)
-			go func() {
-				defer wg.Done()
+		for range workers {
+			wg.Go(func() {
 				for {
 					i := atomic.AddInt64(&idx, 1)
 					if i >= int64(nBlocks) {
@@ -116,7 +114,7 @@ func TestZChunkRestore(t *testing.T) {
 						return
 					}
 				}
-			}()
+			})
 		}
 		wg.Wait()
 		el := time.Since(t0)

@@ -206,7 +206,7 @@ func TestFilePartialBlockRMW(t *testing.T) {
 	if _, err := f.ReadAt(got, 0); err != nil && !errors.Is(err, io.EOF) {
 		t.Fatalf("ReadAt: %v", err)
 	}
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		if got[i] != 'A' {
 			t.Fatalf("byte %d: want A, got %c", i, got[i])
 		}
