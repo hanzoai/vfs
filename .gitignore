@@ -9,3 +9,6 @@ dist/
 .cache/
 CLAUDE.md
 AGENTS.md
+
+# Local symlinks to LLM.md
+GEMINI.md
