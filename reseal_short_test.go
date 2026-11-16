@@ -65,7 +65,11 @@ func TestResealOfShortCopies(t *testing.T) {
 							continue
 						}
 						buf := make([]byte, in.Size)
-						f, _ := v.Open(ctx, in.ID)
+						f, oerr := v.Open(ctx, in.ID)
+						if oerr != nil {
+							bad++ // a short copy can lack the objects a file needs to open
+							continue
+						}
 						if _, rerr := f.ReadAt(ctx, buf, 0); rerr != nil && in.Size > 0 {
 							bad++
 						}
