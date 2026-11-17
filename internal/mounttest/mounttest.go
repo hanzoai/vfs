@@ -67,7 +67,7 @@ func Unmount(mountpoint string) {
 }
 
 // Child is the body of the server process of the mount tests: the test binary run
-// again, by TestMountChild, with the arguments "mountchild <backend URL> <mountpoint> <round>" and the key on standard
+// again, by TestMountChild, with the arguments "mountchild <backend URL> <mountpoint> <round> <journal directory>" and the key on standard
 // input. The store is wrapped so that a call on a nil context panics, as the client of a real store does. A process that mounts a Volume must not use files on its own mount: Go
 // registers an open file with its event poller, the kernel asks the file system
 // for readiness, and the server, which needs that same poller to read its next
@@ -80,6 +80,7 @@ func Child(t *testing.T) {
 	}
 	url, mp := flag.Arg(1), flag.Arg(2)
 	round, _ := strconv.ParseUint(flag.Arg(3), 10, 64)
+	journals := flag.Arg(4) // the parent's, so that a mount that follows another finds its journal
 	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 	if err != nil {
 		t.Fatal(err)
@@ -93,7 +94,7 @@ func Child(t *testing.T) {
 		t.Fatal(err)
 	}
 	be := storetest.Strict{Backend: opened}
-	cfg := vfs.Config{Backend: be, Cipher: vfs.Hybrid(key), Round: round}
+	cfg := vfs.Config{Backend: be, Cipher: vfs.Hybrid(key), Round: round, Journal: journals, Capacity: 64 << 20}
 	if round == 1 {
 		if err := vfs.Create(context.Background(), cfg); err != nil {
 			t.Fatal(err)
@@ -144,7 +145,7 @@ func MountAt(t *testing.T, storeDir, mp string, key *age.HybridIdentity, round u
 // (the credentials an object store's URL does not carry).
 func MountURL(t *testing.T, url string, env []string, mp string, key *age.HybridIdentity, round uint64) *Mounted {
 	t.Helper()
-	cmd := exec.Command(os.Args[0], "-test.run=^TestMountChild$", "-test.count=1", "mountchild", url, mp, strconv.FormatUint(round, 10))
+	cmd := exec.Command(os.Args[0], "-test.run=^TestMountChild$", "-test.count=1", "mountchild", url, mp, strconv.FormatUint(round, 10), storetest.Journals())
 	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdin = strings.NewReader(key.String() + "\n")
 	cmd.Stderr = os.Stderr

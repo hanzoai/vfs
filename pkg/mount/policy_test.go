@@ -50,7 +50,7 @@ func coldWriter(t *testing.T) (*holdsMeta, *vfs.Volume) {
 	if err := vfs.Create(bg, vfs.Config{Backend: h, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	w, err := vfs.Attach(bg, vfs.Config{Backend: h, Cipher: c, Round: 1})
+	w, err := vfs.Attach(bg, vfs.Config{Backend: h, Cipher: c, Round: 1, Journal: storetest.Journals(), Capacity: 64 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func coldWriter(t *testing.T) (*holdsMeta, *vfs.Volume) {
 	if err := w.Flush(bg); err != nil {
 		t.Fatal(err)
 	}
-	cold, err := vfs.Attach(bg, vfs.Config{Backend: h, Cipher: c, Round: 2})
+	cold, err := vfs.Attach(bg, vfs.Config{Backend: h, Cipher: c, Round: 2, Journal: storetest.Journals(), Capacity: 64 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}

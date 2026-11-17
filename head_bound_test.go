@@ -25,7 +25,7 @@ func TestWriterNeverWritesAHeadItsReadersRefuse(t *testing.T) {
 	if err := Create(ctx, Config{Backend: be, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{Backend: be, Cipher: c, Round: 1}
+	cfg := Config{Backend: be, Cipher: c, Round: 1, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk}
 	v, err := Attach(ctx, cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +125,7 @@ func TestResealOfAlreadySealedHeadChangesNothingWhenItNeedsMore(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := bytes.Clone(be.Dump()["head"])
-	err = Reseal(ctx, Config{Backend: be, Cipher: c, Round: 9}, "s3://some/other/place")
+	err = Reseal(ctx, Config{Backend: be, Cipher: c, Round: 9, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk}, "s3://some/other/place")
 	after := be.Dump()["head"]
 	if !errors.Is(err, ErrNeeds) || !bytes.Equal(before, after) {
 		t.Errorf("a build that does not know bit 3 changed the Volume (round claimed) instead of refusing: err=%v changed=%v", err, !bytes.Equal(before, after))

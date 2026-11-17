@@ -83,21 +83,41 @@ place: a Volume copied to another place does not open there until `vfs.Reseal`
 rewrites its Head for it. The place string is canonical: absolute and symlink-free
 for a directory, `s3://bucket/prefix` without slashes at the ends for a bucket.
 
-## Commit, Flush, Fsync
+## Journal, generations, Flush, Fsync
 
-`Flush` settles every written file into chunks, uploads the open pack, writes the
-shards the changes touched, then replaces `head` with **one conditional PUT**
-(`If-Match` on the version read; `If-None-Match: *` for the first). Until that
-write lands `head` names the previous tree, which nothing touched: a crash at any
-point leaves the Volume as the last Flush left it. Uploaded chunks, packs and
-shards of a failed Flush are unreferenced garbage, never corruption.
+A written Volume has a **journal** on the node's disk (`journal/`, `docs/journal.md`; `Config.Journal`
+is required to `Attach`). Every change (`change.go`: a write, a size, or a set of tree records
+with the files it forgets, so rename, link and attribute changes are the third kind and add
+nothing to the journal's format) is built from memory, sealed (`ledger.go`: one AES-256-GCM key
+per journal, itself sealed by the Cipher, kept beside the journal), appended, and applied, in that
+order under `wmu`, by `Volume.mutate`; the same `apply` runs a replay. `mu` guards the state and
+is held for moments: a read of a shard the cache lacks fails with `*missing` under a `local`
+context, the lock is let go, the shard is fetched, the call is repeated (`view`, `edit`,
+`mutate`). Nothing waits for the store or the journal's disk while holding `mu`.
 
-The package documentation (`doc.go`) holds the **durability table**: what is
-durable when each call returns, and what a later journal must keep. In short: only
-`Flush` is durable; `Fsync` and the FUSE close are `Flush`; `Close` is not; `Attach`
-loses no acknowledged commit. Objects are written once under hash or random names,
-so repeating a write, or one that completes after its caller gave up, is harmless;
-the Head compare-and-swap is the only mutation of the tree.
+A file's content is read through three levels: settled (inline or chunks), the frozen layer (the
+writes of the generation being published), the live layer (`file.go`: `body.plan` fills what the
+levels hold under the lock and leaves the chunk fetches for after it).
+
+The publisher (`generation.go`) cuts a **generation** under the lock (the overlay and each dirty
+file's live layer become immutable), then outside it settles files in parallel (cut, hash, seal on
+`Config.Workers`, packs to `Config.Streams` uploads), builds the tree's shards (uploaded in
+parallel), makes the journal durable to the cut's sequence, commits the Head (one conditional PUT
+on the version its last write left, `pkg/fence`) carrying that sequence, and only then tells the
+journal (`Publish`, `Reclaim`). It runs when `journal.Due` says the oldest change is `Bound/2` old,
+when memory, the overlay or the journal hold enough (`pressure`), and on `Flush`. A failed
+generation is made again whole (what completed is kept); an unknown Head write is read back and
+recognised by its tree and sequence. A change that finds the journal full waits for a publication
+that is progressing (`draining`) and is refused with `ErrFull` otherwise.
+
+* `fsync` (`File.Sync`, `Volume.SyncInode`) waits for the journal and for nothing else. `close`
+  and the FUSE flush ask the store for nothing. `Flush` is the store: it returns after a Head
+  carrying every change made before it. `Close` is the journal (no publication); the next `Attach`
+  on the node replays what is left (`Recovery`), or reports it may be lost.
+* The durability table is `doc.go`; the normative text is `docs/SPECIFICATION.md` section 8.
+* `Volume.State` is what an agent reads: degraded, age of the oldest unpublished change, backlog.
+
+Older notes that still hold:
 
 * On the mount no request is answered EINTR: an interrupt (a signal reaching a caller
   that waits) does not end the wait, and every call returns its own result. C callers
@@ -154,17 +174,16 @@ the Head compare-and-swap is the only mutation of the tree.
   255, separated by `/`; every backend keeps those as written (a backend may keep more: the
   replica package's `orgs/acme/kv.db`), and `storetest.Strict` refuses any other from the
   Volume. `List` returns objects with size and modification time, by string prefix.
-* On error the changes stay in memory for the next Flush and the outcome of that
-  attempt is unknown. `ErrStaleRound` means this Volume was fenced; if the store's
+* On error the changes stay in memory and in the journal for the next publication and the
+  outcome of that attempt is unknown. `ErrStaleRound` means this Volume was fenced; if the store's
   Head is exactly its tree, Flush says nil (the commit landed, the reply was lost).
 * `Head.Seq` numbers commit attempts and never repeats; it can skip.
 * A store that returns an older Head cannot be told from the current one by this
   library; a caller that must notice keeps the Seq it last saw.
 * Nothing polls. A deadline timer belongs to the caller.
-* Flush holds the Volume exclusively for its duration, including its store calls.
-* Memory is bounded without a commit: past `Config.Dirty` bytes written (each
-  separate write is charged a fixed overhead too) the files are chunked and
-  uploaded; past `Config.Overlay` pending records they are written into shards.
+* Memory is bounded: past `Config.Dirty` bytes of unpublished writes (each separate write is
+  charged a fixed overhead too) or `Config.Overlay` unpublished records a change waits for a
+  publication, and is refused with `ErrFull` if publication is failing.
 
 ## Fence
 
@@ -216,8 +235,12 @@ while it is open makes its handles fail (no orphan inodes yet).
 ```
 vfs/
 ├── doc.go                   # layout, commit, durability table, crash matrix, fence
-├── volume.go head.go        # Create/Open/Attach/Flush; Head and sealing contexts
-├── ops.go file.go           # namespace operations; File, settle, recut, holes
+├── volume.go head.go        # Create/Open/Attach/Flush/State; mutate, apply, replay; Head and sealing contexts
+├── change.go ledger.go      # a change as the journal records it; the journal's key and sealing
+├── generation.go            # cut, settle, publish, the publisher goroutine
+├── pipe.go                  # bounded uploads, bounded CPU workers, shared fetches
+├── ops.go file.go           # namespace operations; File, layers, body.plan, holes
+├── journal/                 # the node's local log (docs/journal.md)
 ├── chunk.go pack.go         # FastCDC; packs, putChunk/getChunk
 ├── record.go tree.go shard.go overlay.go codec.go lru.go   # metadata tree
 ├── cipher.go                # Cipher, Provider, Hybrid, the configuration check
@@ -288,14 +311,16 @@ answer, and without root the threads stay in D state until reboot.
 * POSIX operations beyond Lookup, ReadDir, Mkdir, Create, Remove, Truncate, Read,
   Write, Flush, Fsync: rename, symlink, hard link, chmod/chown/utimens, statfs,
   xattr, locks, unlink-while-open. The mount answers the missing ones ENOSYS.
-* The node cache and journal (Fsync costs a commit), group commit, parallel
-  uploads, read-ahead, partial-chunk reads.
+* Bulk payloads bypass the ordered log (a second journal for writes over about 64 KiB): fsync
+  waits behind bulk writers in the one log. A local disk of the SATA class should not carry the
+  journal until it is. Unpublished data is also held in memory, so a burst larger than
+  `Config.Dirty` runs at the speed of the store.
+* A local chunk cache on disk, read-ahead, partial-chunk reads.
 * A server and agent process around the Volume.
 * Garbage collection of chunks, packs and shards no Head names (a deposed writer
   can upload packs until its next commit), Snapshot, Clone, Usage, import, export.
 * Retries with backoff, deadlines on store calls, a circuit breaker, metrics,
-  handling of a store's slow-down answers. The Volume lock is held across the store
-  calls of a commit.
+  handling of a store's slow-down answers.
 * Paged directory listing: ReadDir returns a whole directory.
 * Re-sealing a Volume's Head for a new place.
 * Compression.

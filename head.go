@@ -5,8 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-
-	"github.com/zeebo/blake3"
+	"github.com/hanzoai/vfs/internal/blake3"
 )
 
 // headKey is the one mutable object of a Volume. Everything else is written

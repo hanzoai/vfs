@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -40,9 +41,16 @@ func TestHundredThousandFiles(t *testing.T) {
 	flush(t, v)
 	first := be.Puts()
 	t.Logf("create 100,000 files: %v; first Flush %v wrote %d shards, %d packs, %d head", created.Round(time.Millisecond), time.Since(start).Round(time.Millisecond), first["meta"], first["pack"], first["head"])
-	shardsTotal := first["meta"]
-	if first["pack"] != 0 {
-		t.Fatalf("small files wrote %d packs; they are inline", first["pack"])
+	// The Volume publishes as it goes, so the first Flush wrote what was left: the tree is what the
+	// store holds of it (every generation's shards are there, an older version of a node among them).
+	shardsTotal := 0
+	for k := range be.Dump() {
+		if strings.HasPrefix(k, "meta/") {
+			shardsTotal++
+		}
+	}
+	if n := packBytes(be); n != 0 {
+		t.Fatalf("small files made %d bytes of packs; they are inline", n)
 	}
 
 	// A cold volume: stat every file by path.

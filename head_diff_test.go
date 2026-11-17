@@ -464,7 +464,7 @@ func TestTailThroughEveryDoor(t *testing.T) {
 	if err := Create(ctx, Config{Backend: be, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{Backend: be, Cipher: c}
+	cfg := Config{Backend: be, Cipher: c, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk}
 	read := func() []byte {
 		raw := be.Dump()["head"]
 		plain, err := unseal(c, headAAD(be.String()), raw[30:])
@@ -496,7 +496,7 @@ func TestTailThroughEveryDoor(t *testing.T) {
 			t.Fatal(err)
 		}
 		got, err := unmarshalHead(read())
-		if err != nil || got.Tail != tail || got.Journal != 99 || got.Needs != 0 || got.ID != h.ID || got.Seed != h.Seed {
+		if err != nil || got.Tail != tail || got.Journal != 99+uint64(i)+1 || got.Needs != 0 || got.ID != h.ID || got.Seed != h.Seed {
 			t.Fatalf("commit %d: %v tail kept=%v", i, err, got.Tail == tail)
 		}
 	}
@@ -604,9 +604,10 @@ func TestNeedsAndTailAreSealed(t *testing.T) {
 	t.Logf("%d sealed bytes x 2 flips: every one refused", len(rec)-30)
 }
 
-// a commit carries Needs, the Tail and the Journal of the Head it read, byte for byte. This build cannot
-// open a Volume whose Needs is not 0, so the Head is planted in the Volume's memory and the plaintext it commits is
-// decoded by hand: the first build that knows a bit relies on exactly this.
+// a commit carries Needs and the Tail of the Head it read, byte for byte, and writes the journal's
+// sequence. This build cannot open a Volume whose Needs is not 0, so the Head is planted in the
+// Volume's memory and the plaintext it commits is decoded by hand: the first build that knows a bit
+// relies on exactly this.
 func TestCommitCarriesNeedsAndTail(t *testing.T) {
 	ctx := context.Background()
 	be := storetest.NewMem()
@@ -615,13 +616,13 @@ func TestCommitCarriesNeedsAndTail(t *testing.T) {
 	if err := Create(ctx, Config{Backend: be, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	v, err := Attach(ctx, Config{Backend: be, Cipher: c, Round: 1})
+	v, err := Attach(ctx, Config{Backend: be, Cipher: c, Round: 1, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk})
 	if err != nil {
 		t.Fatal(err)
 	}
 	tail := tlv(3, "layer") + tlv(70, "hint")
 	v.mu.Lock()
-	v.head.Needs, v.head.Tail, v.head.Journal = 1<<3, tail, 17
+	v.head.Needs, v.head.Tail = 1<<3, tail
 	v.mu.Unlock()
 	if _, err := v.Create(ctx, RootInode, "f", 0o644); err != nil {
 		t.Fatal(err)
@@ -648,8 +649,8 @@ func TestCommitCarriesNeedsAndTail(t *testing.T) {
 	b = b[48:]
 	journal := next()
 	needs := next()
-	if journal != 17 || needs != 1<<3 || string(b) != tail {
-		t.Fatalf("a commit wrote journal=%d needs=%#x tail=%q; it read 17, 8 and %q", journal, needs, b, tail)
+	if journal != 1 || needs != 1<<3 || string(b) != tail {
+		t.Fatalf("a commit wrote journal=%d needs=%#x tail=%q; it read 1, 8 and %q", journal, needs, b, tail)
 	}
 }
 

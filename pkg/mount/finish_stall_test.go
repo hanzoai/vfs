@@ -15,9 +15,8 @@ import (
 	"github.com/hanzoai/vfs/internal/storetest"
 )
 
-// stalledVolume is a Volume whose commit has started and whose store has stopped answering, as
-// stop() leaves it when it gives up after commitGrace: the Volume's lock is held by that commit.
-// release lets the store answer again.
+// stalledVolume is a Volume whose publication has started and whose store has stopped answering,
+// as stop() leaves it when it gives up. release lets the store answer again.
 func stalledVolume(t *testing.T) (v *vfs.Volume, release func()) {
 	t.Helper()
 	k, _ := age.GenerateHybridIdentity()
@@ -28,7 +27,7 @@ func stalledVolume(t *testing.T) (v *vfs.Volume, release func()) {
 	if err := vfs.Create(bg, vfs.Config{Backend: h, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	v, err := vfs.Attach(bg, vfs.Config{Backend: h, Cipher: c, Round: 1})
+	v, err := vfs.Attach(bg, vfs.Config{Backend: h, Cipher: c, Round: 1, Journal: storetest.Journals(), Capacity: 64 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,8 +71,8 @@ func TestFinishDoesNotClaimALostCommitIsLost(t *testing.T) {
 	if err == nil {
 		t.Fatal("no error")
 	}
-	if !strings.Contains(err.Error(), "did not finish") || !strings.Contains(err.Error(), "may be lost") {
-		t.Errorf("the message is %q: it must say that the last commit did not finish and that what it held may be lost", err)
+	if !strings.Contains(err.Error(), "did not finish") || !strings.Contains(err.Error(), "journal") {
+		t.Errorf("the message is %q: it must say that the last publication did not finish and that what it held is in the journal", err)
 	}
 }
 
@@ -102,7 +101,7 @@ func TestFinishWaitsForASlowCommit(t *testing.T) {
 	if err := vfs.Create(bg, vfs.Config{Backend: h, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	v, err := vfs.Attach(bg, vfs.Config{Backend: h, Cipher: c, Round: 1})
+	v, err := vfs.Attach(bg, vfs.Config{Backend: h, Cipher: c, Round: 1, Journal: storetest.Journals(), Capacity: 64 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}

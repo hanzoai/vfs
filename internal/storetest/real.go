@@ -73,6 +73,9 @@ func (r *Real) Prefix(name string) string { return fmt.Sprintf("%s-%d", name, r.
 
 // StopReal stops the server if one was started. Call it from TestMain.
 func StopReal() {
+	if journalsDir != "" {
+		_ = os.RemoveAll(journalsDir)
+	}
 	if real == nil || real.cmd == nil {
 		return
 	}

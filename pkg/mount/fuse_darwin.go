@@ -9,8 +9,10 @@
 // fuse-t is preferred: no kernel extension, runs as a userspace NFSv4 server,
 // works under SIP.
 //
-// A mounted Volume is durable at FlushFile and SyncFile, which return only after
-// the Volume's Head has advanced in the store, and once more when the mount ends.
+// A write is applied to the Volume and appended to its journal on this node's disk before
+// it is answered; SyncFile returns when the journal has it on the disk, and FlushFile (close)
+// asks for nothing. The store has the change within the Volume's bound, and when the mount
+// ends everything is published first.
 package mount
 
 import (
@@ -59,7 +61,7 @@ func Mount(ctx context.Context, vol *vfs.Volume, mountpoint string) error {
 	select {
 	case serveErr = <-joined:
 	case <-ctx.Done():
-		serveErr, _ = srv.group.stop(mountpoint, fuse.Unmount, detach, joined)
+		serveErr, _ = stop(vol, mountpoint, fuse.Unmount, detach, joined)
 	}
 	return finish(vol, serveErr)
 }
@@ -76,8 +78,7 @@ func detach(mountpoint string) error {
 // root at 1.
 type server struct {
 	fuseutil.NotImplementedFileSystem
-	vol   *vfs.Volume
-	group *committer
+	vol *vfs.Volume
 
 	mu      sync.Mutex
 	next    fuseops.HandleID
@@ -85,7 +86,7 @@ type server struct {
 }
 
 func newServer(vol *vfs.Volume) *server {
-	return &server{vol: vol, group: newCommitter(vol), next: 1, handles: map[fuseops.HandleID]*vfs.File{}}
+	return &server{vol: vol, next: 1, handles: map[fuseops.HandleID]*vfs.File{}}
 }
 
 func attrs(in vfs.Inode) fuseops.InodeAttributes {
@@ -281,15 +282,13 @@ func (s *server) WriteFile(ctx context.Context, op *fuseops.WriteFileOp) error {
 	return errno(err)
 }
 
-// A commit is not abandoned halfway because the kernel interrupted the call: it is
-// repeatable and safe to finish, so it runs to its end.
-func (s *server) SyncFile(ctx context.Context, _ *fuseops.SyncFileOp) error {
-	return errno(s.group.commit())
+// A sync is not abandoned halfway because the kernel interrupted the call: it runs to its end.
+func (s *server) SyncFile(ctx context.Context, op *fuseops.SyncFileOp) error {
+	return errno(s.vol.SyncInode(context.WithoutCancel(ctx), vfs.InodeID(op.Inode)))
 }
 
-func (s *server) FlushFile(ctx context.Context, _ *fuseops.FlushFileOp) error {
-	return errno(s.group.commit()) // close(2) is not restarted: wait for the commit
-}
+// FlushFile is the kernel's close(2): it asks for nothing.
+func (s *server) FlushFile(context.Context, *fuseops.FlushFileOp) error { return nil }
 
 func (s *server) ReleaseFileHandle(_ context.Context, op *fuseops.ReleaseFileHandleOp) error {
 	if f := s.file(op.Handle); f != nil {

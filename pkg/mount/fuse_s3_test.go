@@ -45,7 +45,7 @@ func TestFUSEReadsExistingFilesOverS3(t *testing.T) {
 	if err := vfs.Create(bg, vfs.Config{Backend: be, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	v, err := vfs.Attach(bg, vfs.Config{Backend: be, Cipher: c, Round: 1})
+	v, err := vfs.Attach(bg, vfs.Config{Backend: be, Cipher: c, Round: 1, Journal: storetest.Journals(), Capacity: 64 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}

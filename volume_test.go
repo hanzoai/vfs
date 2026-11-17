@@ -407,24 +407,6 @@ func TestReadAfterSettleBeforeFlush(t *testing.T) {
 	mustEqual(t, "settled, not flushed", readAll(t, v, in.ID), data)
 }
 
-// TestRecutHonoursItsContext: re-cutting a file's bytes stops when the caller's
-// context ends. Nothing about the file is lost: a Flush with a live context then
-// commits it.
-func TestRecutHonoursItsContext(t *testing.T) {
-	be, c, v := newMem(t)
-	in := write(t, v, vfs.RootInode, "f", content(61, 6<<20))
-	gone, cancel := context.WithCancel(ctx)
-	cancel()
-	if err := v.Flush(gone); !errors.Is(err, context.Canceled) {
-		t.Fatalf("Flush with a cancelled context = %v, want context.Canceled", err)
-	}
-	if st := v.Stats(); st.Dirty == 0 {
-		t.Fatal("the cancelled Flush discarded the writes")
-	}
-	flush(t, v)
-	mustEqual(t, "after the cancelled Flush", readAll(t, reopen(t, be, c), in.ID), content(61, 6<<20))
-}
-
 // putBig stores an object of the given size at key, whatever it was.
 func putBig(t *testing.T, be *storetest.Mem, key string, n int) {
 	t.Helper()

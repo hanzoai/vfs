@@ -184,9 +184,7 @@ func runsStructure(t *testing.T, what string, v *Volume, ino InodeID, size int) 
 			t.Fatalf("%s: extent %d ends at %d past size %d", what, i, e.end(), size)
 		}
 		prevEnd = e.end()
-		v.mu.Lock()
-		p, err := v.getChunk(context.Background(), e.id)
-		v.mu.Unlock()
+		p, err := v.getChunk(context.Background(), v.root, e.id)
 		if err != nil {
 			t.Fatalf("%s: extent %d chunk: %v", what, i, err)
 		}
@@ -229,7 +227,7 @@ func runsRun(t *testing.T, seed uint64, canonical bool) {
 		t.Fatal(err)
 	}
 	mk := func(round uint64) *Volume {
-		cf := Config{Backend: be, Cipher: c, Round: round}
+		cf := Config{Backend: be, Cipher: c, Round: round, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk}
 		if !canonical {
 			cf.Dirty, cf.Overlay, cf.Cache = 150<<10, 5, 1<<20
 		}

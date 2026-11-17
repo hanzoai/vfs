@@ -23,7 +23,7 @@ func headVolume(t *testing.T) (*storetest.Mem, Cipher, Config) {
 	if err := Create(context.Background(), Config{Backend: be, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	return be, c, Config{Backend: be, Cipher: c}
+	return be, c, Config{Backend: be, Cipher: c, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk}
 }
 
 // putRaw replaces the Head's plaintext with exactly plain (sealed to the place), at round 0.
@@ -122,7 +122,7 @@ func TestTailSurvivesAnOrdinaryWriter(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Tail != tail || got.Journal != 123456789 || got.Needs != 0 {
+		if got.Tail != tail || got.Journal != 123456789+uint64(i)+1 || got.Needs != 0 {
 			t.Fatalf("commit %d dropped or changed a field: journal=%d tail ok=%v needs=%d", i, got.Journal, got.Tail == tail, got.Needs)
 		}
 		if got.Seq <= 9 {

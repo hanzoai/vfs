@@ -47,6 +47,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/hanzoai/vfs/pkg/backend"
 )
@@ -89,6 +90,16 @@ type Store struct {
 	be    Backend
 	max   int64
 	token [tokenLen]byte
+
+	mu   sync.Mutex
+	last map[string]landed // what each key was after this Store's last write that landed
+}
+
+// landed is what a key was left as by a write of this Store: its version, and the round
+// the write was made at.
+type landed struct {
+	version backend.Version
+	round   uint64
 }
 
 const tokenLen = 16
@@ -98,7 +109,7 @@ const tokenLen = 16
 // record that a reader of this Store would refuse is never written, so a commit that
 // would brick the object fails instead, with ErrTooLarge and nothing changed.
 func New(be Backend, max int64) *Store {
-	s := &Store{be: be, max: max}
+	s := &Store{be: be, max: max, last: map[string]landed{}}
 	if _, err := rand.Read(s.token[:]); err != nil {
 		panic("fence: no randomness: " + err.Error())
 	}
@@ -135,14 +146,46 @@ func (s *Store) fits(record []byte) error {
 
 // write conditions a write on the version just read: create-only when the key was
 // absent (version ""), else compare-and-set on that version.
-func (s *Store) write(ctx context.Context, key string, data []byte, v backend.Version) error {
-	var err error
+func (s *Store) write(ctx context.Context, key string, data []byte, v backend.Version, round uint64) error {
+	var (
+		now backend.Version
+		err error
+	)
 	if v == "" {
-		_, err = s.be.PutIfAbsent(ctx, key, data)
+		now, err = s.be.PutIfAbsent(ctx, key, data)
 	} else {
-		_, err = s.be.PutIfVersion(ctx, key, data, v)
+		now, err = s.be.PutIfVersion(ctx, key, data, v)
+	}
+	switch {
+	case err == nil:
+		s.remember(key, now, round)
+	case !errors.Is(err, backend.ErrConflict):
+		s.forget(key) // the write may have landed: what the object is now is not known
 	}
 	return err
+}
+
+// remember keeps the version a write of this Store left behind: the next Put of the key
+// is conditioned on it and needs no read first.
+func (s *Store) remember(key string, v backend.Version, round uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.last[key] = landed{v, round}
+}
+
+func (s *Store) forget(key string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.last, key)
+}
+
+// known returns the version this Store left the key at, when it left it at round: a Put
+// at another round is not the write the version was kept for.
+func (s *Store) known(key string, round uint64) (backend.Version, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	l, ok := s.last[key]
+	return l.version, ok && l.version != "" && l.round == round
 }
 
 // read returns the object's bytes and version, or nil and "" if it is absent.
@@ -162,9 +205,11 @@ func (s *Store) Create(ctx context.Context, key string, payload []byte) error {
 	if err := s.fits(record); err != nil {
 		return fmt.Errorf("fence: create %s: %w", key, err)
 	}
-	if _, err := s.be.PutIfAbsent(ctx, key, record); err != nil {
+	v, err := s.be.PutIfAbsent(ctx, key, record)
+	if err != nil {
 		return fmt.Errorf("fence: create %s: %w", key, err)
 	}
+	s.remember(key, v, 0)
 	return nil
 }
 
@@ -187,6 +232,21 @@ func (s *Store) Put(ctx context.Context, key string, payload []byte, round uint6
 	if err := s.fits(want); err != nil {
 		return fmt.Errorf("fence: put %s: %w", key, err)
 	}
+	// The steady state is one request: this Store's last write left the object at a
+	// version it kept, and a write conditioned on it is admitted by the store exactly
+	// when nothing has changed the object since, which is when the recorded round is
+	// still the one this writer holds. A claim by a higher round changes the version, so
+	// the write loses and the loop below reads the round that now holds the key.
+	if v, ok := s.known(key, round); ok {
+		err := s.write(ctx, key, want, v, round)
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, backend.ErrConflict) {
+			return fmt.Errorf("fence: put %s: %w", key, err)
+		}
+		s.forget(key)
+	}
 	var lastErr error
 	for range maxCASAttempts {
 		data, version, err := s.read(ctx, key)
@@ -205,7 +265,7 @@ func (s *Store) Put(ctx context.Context, key string, payload []byte, round uint6
 		if round < recorded {
 			return fmt.Errorf("%w: key=%s round=%d recorded=%d", ErrStaleRound, key, round, recorded)
 		}
-		if err := s.write(ctx, key, want, version); err != nil {
+		if err := s.write(ctx, key, want, version, round); err != nil {
 			if errors.Is(err, backend.ErrConflict) {
 				lastErr = err
 				continue // re-read the winner's state and retry.
@@ -284,7 +344,7 @@ func (s *Store) Rewrite(ctx context.Context, key string, round uint64, carry fun
 		if err := s.fits(last); err != nil {
 			return fmt.Errorf("fence: claim %s: %w", key, err)
 		}
-		if err := s.write(ctx, key, last, version); err != nil {
+		if err := s.write(ctx, key, last, version, round); err != nil {
 			if errors.Is(err, backend.ErrConflict) {
 				lastErr = err
 				continue // a predecessor's write landed; re-read it and carry it forward.

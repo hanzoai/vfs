@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"sync"
 	"syscall"
 	"time"
 
@@ -38,8 +37,10 @@ func errno(err error) error {
 		return syscall.EINVAL
 	case errors.Is(err, vfs.ErrTooBig):
 		return syscall.EFBIG
-	case errors.Is(err, vfs.ErrReadOnly), errors.Is(err, vfs.ErrStaleRound):
+	case errors.Is(err, vfs.ErrReadOnly), errors.Is(err, vfs.ErrStaleRound), errors.Is(err, vfs.ErrJournal), errors.Is(err, vfs.ErrClosed):
 		return syscall.EROFS
+	case errors.Is(err, vfs.ErrFull):
+		return syscall.ENOSPC
 	case errors.Is(err, context.Canceled):
 		// Only the end of the mount cancels a context here (see below): nobody is
 		// waiting for the answer.
@@ -123,93 +124,31 @@ func patient(req context.Context) (context.Context, context.CancelFunc) {
 	return ctx, cancel
 }
 
-// session is what every node and handle of one mount shares: the Volume, the mount's
-// own context, and the committer. It is built only by newSession, which refuses a
-// nil context: the work of a read runs on base, and a store client panics on a nil
-// parent the first time it is used.
+// session is what every node and handle of one mount shares: the Volume and the mount's
+// own context. It is built only by newSession, which refuses a nil context: the work of a
+// read runs on base, and a store client panics on a nil parent the first time it is used.
 type session struct {
-	vol   *vfs.Volume
-	base  context.Context
-	group *committer
+	vol  *vfs.Volume
+	base context.Context
 }
 
 func newSession(base context.Context, vol *vfs.Volume) *session {
 	if base == nil || vol == nil {
 		panic("mount: a session needs a context and a Volume")
 	}
-	return &session{vol: vol, base: base, group: newCommitter(vol)}
-}
-
-// committer runs the commits of a mount. A commit settles every open file and
-// replaces the Head, and every other caller queues behind it, so it is shared work: it
-// runs on a context nothing cancels, in a goroutine of its own, never half-cancelled.
-//
-// Commits do not pile up behind a stalled store: at most two exist, the one running
-// and one waiting to start. A caller that arrives while one is running joins the one
-// waiting, which starts after the caller's writes were made and so covers them; a
-// caller that arrives when none is running starts one. Five thousand callers of fsync
-// against a stalled store therefore share two commits, not five thousand.
-type committer struct {
-	vol       *vfs.Volume
-	mu        sync.Mutex
-	run, next *flight
-}
-
-// flight is one commit and the callers waiting on it.
-type flight struct {
-	done chan struct{}
-	err  error
-}
-
-func newCommitter(vol *vfs.Volume) *committer { return &committer{vol: vol} }
-
-// commit makes everything written before the call durable, and returns the result of
-// the commit that did.
-func (c *committer) commit() error {
-	f := c.join()
-	<-f.done
-	return f.err
-}
-
-// join returns a flight that starts after now.
-func (c *committer) join() *flight {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.run == nil {
-		c.run = &flight{done: make(chan struct{})}
-		go c.fly(c.run)
-		return c.run
-	}
-	if c.next == nil {
-		c.next = &flight{done: make(chan struct{})}
-	}
-	return c.next
-}
-
-// fly runs f, then starts the flight that was waiting, if any.
-func (c *committer) fly(f *flight) {
-	f.err = c.vol.Flush(context.Background())
-	close(f.done)
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.run, c.next = c.next, nil
-	if c.run != nil {
-		go c.fly(c.run)
-	}
+	return &session{vol: vol, base: base}
 }
 
 // finishGrace is how long the end of a mount waits for its last commit.
 const finishGrace = 3 * time.Second
 
-// finish commits what the mount wrote once the kernel has released it. A Volume that was
-// only opened has nothing to commit. Every close is a commit already, so what is left is
-// what a holder wrote after the commit that SIGTERM made, and it is small. A commit that
-// the store does not answer keeps the Volume's lock, and anything that asks for the lock
-// waits as long, a Stats as much as a Flush: so all of it runs apart and the wait for it
-// ends after finishGrace, with an error that says what may not have been committed, and
-// the process can end. The commit is not known to have failed: its request may be at the
-// store already, so what it held may be lost, not is. When Serve failed as well, both are
-// returned. A supervisor that waits longer for a stalled store gets nothing more.
+// finish publishes what the mount wrote once the kernel has released it. A Volume that was
+// only opened has nothing to publish. The kernel's own writeback has been flushed to the
+// daemon by then (stop asks for it before it unmounts), so what is left is what a holder
+// wrote after, and it is small. The journal holds all of it on this node either way: a
+// publication that the store does not answer in finishGrace is given up with an error that
+// says what the store may not have, and the next mount of the Volume on this node
+// publishes it. When Serve failed as well, both are returned.
 func finish(vol *vfs.Volume, serveErr error) error {
 	done := make(chan error, 1)
 	go func() {
@@ -223,7 +162,7 @@ func finish(vol *vfs.Volume, serveErr error) error {
 	select {
 	case err = <-done:
 	case <-time.After(finishGrace):
-		err = fmt.Errorf("the last commit did not finish in %s: what the mount held and had not committed may be lost", finishGrace)
+		err = fmt.Errorf("the last publication did not finish in %s: what the store lacks is in this node's journal, and the next mount of the Volume here publishes it", finishGrace)
 	}
 	return errors.Join(serveErr, err)
 }

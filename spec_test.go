@@ -155,7 +155,7 @@ func TestSpecFenceRecord(t *testing.T) {
 	if string(raw[:6]) != "fence\x00" || binary.BigEndian.Uint64(raw[6:14]) != 0 {
 		t.Fatalf("created head: magic %q round %d", raw[:6], binary.BigEndian.Uint64(raw[6:14]))
 	}
-	if _, err := Attach(ctx, Config{Backend: be, Cipher: c, Round: 0x0102030405060708}); err != nil {
+	if _, err := Attach(ctx, Config{Backend: be, Cipher: c, Round: 0x0102030405060708, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk}); err != nil {
 		t.Fatal(err)
 	}
 	raw2 := be.Dump()["head"]
@@ -347,7 +347,7 @@ func TestSpecExtension(t *testing.T) {
 		if err := Create(ctx, Config{Backend: be, Cipher: c}); err != nil {
 			t.Fatal(err)
 		}
-		v, err := Attach(ctx, Config{Backend: be, Cipher: c, Round: 1})
+		v, err := Attach(ctx, Config{Backend: be, Cipher: c, Round: 1, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk})
 		if err != nil {
 			t.Fatal(err)
 		}

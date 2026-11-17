@@ -53,6 +53,15 @@ relative to the Volume's prefix, which is joined to them with one `/`.
 | `List(prefix)` | every object whose key begins with `prefix` as a string (`ext/y/a` lists `ext/y/ab` and `ext/y/a/c`), each with its key, its size and the time the store last modified it, by the store's own clock; none is hidden |
 | `Stat(key)` | the size of the object at `key` without its body; absent is `NotFound` |
 
+**Buffers.** The caller owns the buffer of a write. Once `Put`, `PutIfAbsent` or `PutIfVersion`
+returns, the store client MUST NOT read it again, whatever it did to send it (one request, parts, a
+retry after a failure, a request still running when the caller gave up): the caller may reuse it,
+clear it or give it back to a pool at once, and a writer does. A call that fails may have been
+read: the caller keeps the buffer until it returns, and reuses it only after. The conformance
+suite (`internal/storetest`) clears the buffer the instant a write returns and reads the object
+back, against the memory store, the directory store, the S3 client over a protocol server, and a
+real server.
+
 A Volume reads and writes with the first six. `List` and `Stat` are for tools: a
 collector (11.1), and the check of a copied Volume (5.4).
 
@@ -365,27 +374,33 @@ Head it saw and compares.
 
 ### 5.3 The commit
 
-A commit (`Flush`) makes the writer's tree durable. In order:
+A commit publishes a generation: the changes a writer holds, up to one journal sequence, cut
+out at an instant. In order:
 
-1. Every file with unsettled writes is settled: its bytes are cut into chunks, the
-   chunks are sealed and appended to the open pack, and its records are staged.
-2. The open pack, if any, is written with `Put`.
-3. The staged records are written into new shards, every changed node of the tree and
-   no other, leaf to root. Each is written with `Put`.
-4. The Head is written, once, at the writer's Round, with `Seq` the next attempt
-   number, `Root` the new root and `Next` the next inode number.
+1. Every file with unsettled writes in the generation is settled: its bytes are cut into
+   chunks, the chunks are sealed and appended to a pack, and its records are staged. Packs go to
+   the store with `Put` as they fill, in parallel.
+2. The staged records are written into new shards, every changed node of the tree and no
+   other, leaf to root. Each is written with `Put`, in parallel.
+3. The journal is made durable up to the generation's sequence.
+4. The Head is written, once, at the writer's Round, with `Seq` the next attempt number, `Root`
+   the new root, `Next` the next inode number and `Journal` the generation's sequence. In the
+   steady state the write is conditioned on the version the writer's last write left, with no
+   read before it; if it loses, the Head is read and the Round that holds it is decided.
 
 Only step 4 changes any object a reader can reach. A crash, or a failure, before it
 leaves the previous Head and so the previous tree whole; the chunks, packs and shards
-already written are unreferenced garbage, never corruption. Steps 2 and 3 are
-idempotent by content address, so repeating them is harmless.
+already written are unreferenced garbage, never corruption. Steps 1 and 2 are
+idempotent by content address (a pack's name is random: a repeated pack is garbage), so
+repeating them is harmless.
 
-The outcome of a failed commit: `nil` means committed. Any other error means the
+The outcome of a failed commit: success means committed. Any other error means the
 outcome of that attempt is unknown to the caller (a reply can be lost after the write
-landed), and the writer keeps its changes for the next attempt. "Stale round" means
-the writer was fenced and can never commit again; if the store's Head then holds
-exactly the writer's root and Volume id (an earlier attempt landed and a successor
-carried it forward), the commit counts as landed.
+landed): the writer reads the Head, and if it carries the generation's tree and sequence the
+commit counts as landed. Otherwise the writer keeps its changes and tries again. "Stale round"
+means the writer was fenced and can never commit again; if the store's Head then holds exactly
+the writer's root and sequence (an earlier attempt landed and a successor carried it forward),
+the commit counts as landed.
 
 ### 5.4 Moving a Volume
 
@@ -564,46 +579,63 @@ across Volumes.
 
 A chunk is sealed on its own (4.2, chunk context) and the sealed frames are laid end to
 end in a pack, with no header and no index: where each lies is the chunk table (record
-`04`). A writer uploads the open pack when it reaches 16 MiB or at a commit. A reader
+`04`). A writer uploads the open pack when it reaches 16 MiB or when the generation it belongs to has no more chunks. A reader
 fetches one chunk with a ranged read of its frame, opens it, and MUST check that the
 hash of the plaintext is the chunk id.
 
-## 8. What is durable when a call returns (today)
+## 8. What is durable when a call returns
 
-The reference implementation's behaviour today, which any change MUST preserve or
-extend. "Commit" is the successful return of the Head's conditional write (5.3).
+"Journal" is the writer's node-local journal (the journal's own text is `docs/journal.md`): a
+change is durable there when the journal's sync for it has returned. "Store" is the Head
+advancing: the successful return of its conditional write (5.3). Three watermarks name the
+changes of a Volume in order: the last applied (visible), the last durable in the journal,
+and the last the Head carries (published, the Head's `Journal` field).
 
 | Call | Durable when it returns |
 |---|---|
-| write, truncate, create, make directory, remove | nothing. Held in memory; lost if the process dies. Past a bound (`Config.Dirty`, 64 MiB by default) the data is chunked and uploaded, still unreferenced and not durable |
-| close of a file handle | nothing. It releases the handle |
-| flush | everything written before the call, committed. It returns only after the Head advanced |
-| fsync | the same as flush: a full commit. There is no cheaper durable point |
-| flush on a mount (every `close(2)`) | the same as flush: a full commit, also for a handle that wrote nothing |
+| write, truncate, create, make directory, remove | nothing: applied in memory and appended to the journal. Visible to every reader at once |
+| fsync of a file | the journal, for every change the file depends on (its writes, truncates, and the change that created it). Concurrent callers share one sync. The store is not asked |
+| fsync of a directory, or of a Volume | the journal, for every change made before the call |
+| close of a file handle | nothing, and no request of the store |
+| flush on a mount (every `close(2)`) | nothing, and no request of the store; constant time |
 | release on a mount | nothing |
-| end of a mount | one flush |
-| close of the Volume | nothing; it does not flush |
-| attach (takeover) | every commit the previous owner saw acknowledged is in the new owner's tree, and no commit by an older Round lands afterwards |
+| flush of a Volume | the store, for every change made before the call: it returns after a Head that carries them committed |
+| publication by the writer, on its own | the store, within the bound (below) of each change's own acknowledgement while the store answers |
+| end of a mount | the kernel's cached writes handed to the writer, then one flush; if the store does not answer in time, what it lacks stays in the journal |
+| close of the Volume | the journal; it does not flush and asks the store for nothing |
+| attach (takeover on the node that holds the previous owner's journal) | every change the previous owner had made durable in its journal is in the new owner's tree before the call returns |
+| attach (takeover elsewhere, or the journal lost) | the last Head only. The changes the previous owner acknowledged and had not published are not available; the writer is told they may be missing |
 
-This table is what the code does now, and it is not the target. The draft HIP for this
-layout (HIP-1342, section 8) states a different behaviour for `close`: a close does not
-commit by itself, and a read-only handle's close does not publish another handle's
-writes. Today every close on a mount is a flush, and a flush commits everything any
-handle wrote, so a read-only close can publish another handle's writes. (A flush with
-nothing to commit already makes no store request: `TestCleanFlushMakesNoStoreRequest`.)
-The change that adds the journal changes the rows for `close` and for a flush on a
-mount, and this section with them; until then the table above binds.
+**The bound.** Every change is published within `Bound` (default 5 s) of its own
+acknowledgement, measured from the instant the journal appended it and moved by no later change.
+The bound is a promise about a store that answers: when it does not, the writer cannot keep it
+and says so (`State`). A node that is lost for good loses at most what the journal held and the
+store did not, which the bound limits to the changes of the last `Bound`. A process that ends
+loses none that a sync returned for.
 
-A later change (a node-local journal for fast fsync, group commit) MUST keep: flush
-and the detach sequence return only after the Head advanced in the store; a takeover
-loses no acknowledged commit; objects are written once under names that make
-repeating a write harmless; and the Head's compare-and-swap is the only mutation of
-the tree. A journal may make a call cheaper only by making it durable somewhere else
-first, and then flush MUST still be a commit in the store.
+**What the kernel holds.** A mount may let the kernel hold a write that was acknowledged to its
+caller before it reaches the writer. The bound runs from the change's entry into the journal. As
+for any file system, only fsync, and syncfs for the whole mount, make such a write durable, and
+the end of a mount asks the kernel for them first.
+
+**Ordering and the Head.** The Head's `Journal` is the highest journal sequence whose effects the
+tree includes, and a Head never carries a sequence that is not durable in the journal. In order:
+the generation's objects are written, the Head commits, the journal is told the sequence is
+published, and its space is reclaimed. A change made after the instant a generation was cut
+belongs to the next generation, and a flush returns only after the generation that holds every
+change made before it. A takeover loses no change the previous owner saw published, and no
+publication by an older Round lands afterwards.
+
+**Backpressure.** The journal has a fixed capacity and a writer has a bound on the changes it
+holds that the store lacks. A change that finds either nearly full is slowed; one that finds it
+full is refused, changing nothing (`ErrFull`, which a mount answers `ENOSPC`); a journal that has
+failed refuses every later change (`ErrJournal`, `EROFS`). The state of the bound is readable:
+whether it can be trusted, the age of the oldest change the store lacks, and the bytes of
+journal behind it.
 
 On a mounted file system, a signal that reaches a waiting caller makes the kernel
 interrupt the request, and no request is answered "interrupted": every call waits for
-its own result, and no interrupt cancels a commit or a fetch. (informative) The reason
+its own result, and no interrupt cancels a sync or a fetch. (informative) The reason
 is what callers do with the answer, measured on Linux: a C caller does not retry
 `fsync(2)`, so SQLite reported an I/O error from it (a database over a mount failed
 7 runs of 7 on one kernel, and a C caller under a timer saw 246,912 interrupted
@@ -611,6 +643,52 @@ fsyncs in 5,000); `stat(2)` and directory reads answered "interrupted" reached C
 as errors 1,586 times in 60,000 calls without `SA_RESTART` and 2,884 with it; `read(2)`
 reached its caller as `EIO`; `close(2)` is never restarted; a restarted create with
 `O_EXCL` meets its own file. The cost is in section 11.2.
+
+### 8.1 Specification notes: the journal's place in a writer
+
+A conforming writer MUST:
+
+1. Make every change in this order: build it from what the writer holds in memory, seal it,
+   append it to the journal, apply it, with no other change between. It MUST NOT hold any lock
+   that a reader needs across a request of the store or a call that waits for the journal's
+   disk.
+2. Seal what it appends to the journal before it is appended. The key it seals under is of
+   that journal's own, sealed by the Volume's Cipher and kept beside the journal.
+3. Name the journal by the Volume and the Round (a lineage), and open it with the Head's
+   `Journal` as the sequence the store holds, on every mount, including 0. When the journal does
+   not fit the Head, or is damaged, it MUST fall back to the Head, MUST report that an
+   unpublished tail may be missing, and MUST NOT retry with another sequence. A journal in use by
+   another process is a writer still running: the claim has fenced it.
+4. Cut a generation under a short lock: everything applied up to one sequence, immutable
+   thereafter. It MUST write the generation's objects and commit the Head outside that lock, with
+   the Head carrying the sequence of the cut; MUST make the sequence durable in the journal before
+   the Head names it; and MUST tell the journal the store has it only after the Head committed.
+5. After a Head write whose answer is not known, read the Head back and recognise a Head that
+   carries its own tree and sequence as committed; it MUST NOT commit that generation twice, and
+   MUST NOT discard changes made after the cut.
+6. Refuse a change, changing nothing, when the journal or the bound on memory is full and the
+   store is not taking publications; and stop taking changes when the journal has failed.
+7. Make a close, and the flush of a descriptor on a mount, free of any request of the store, and
+   the fsync of a file wait for the journal and for nothing else.
+
+Acceptance criteria, each testable from outside a store and a clock the test moves:
+
+* a file written and fsynced, the process killed, and the Volume attached again on the same node,
+  has every byte, and the store has them when Attach returns;
+* a write, fsync, read, close and a flush with nothing to publish make no request of the store;
+* with a request of the store held for 2 s (the Head, a shard, a pack, or a read of a chunk),
+  stat, lookup, readdir, create, write, fsync and read of other files complete in the time they
+  take with nothing held;
+* with a clock the test moves and a writer that never stops, no change is absent from the store
+  once its age exceeds the bound;
+* with the store refusing every write, changes are accepted until the journal or the memory bound
+  is full, then refused with `ErrFull`; when the store answers, everything accepted is published in
+  order and nothing is lost;
+* concurrent writes, flushes and syncs never acknowledge the wrong generation: a flush that
+  returns implies every change that completed before it began is in the store;
+* a Head whose write landed and whose answer was lost is counted once, and later changes are kept;
+* a takeover during a publication refuses the old owner's Head, and the new owner has the last
+  Head the store acknowledged and no part of the generation in flight.
 
 ## 9. Limits
 
@@ -713,50 +791,44 @@ rules, and a change to a rule is a change to this text.
 
 Known limits of the reference implementation. None changes the layout.
 
-* **A stalled store stalls its callers, and a kill frees few of them.** A store request has
-  no deadline, and no call is answered "interrupted" (section 8). The kernel keeps a request
-  that reached the daemon until the daemon answers it, so with a store that has stopped
-  answering, a caller that is killed stays in the kernel (state D) until the store
-  resumes, except where noted. Measured with the store stopped:
-  * a cold lookup (the store is asked, no commit is running), stat and readdir of a name
-    not yet read: freed in about 3 s, the grace after which an interrupted request that
-    changes nothing is answered "interrupted" (a mount that answered it at once freed the
-    caller in 0.03 s, and C callers could not take the answer);
-  * anything behind a stalled commit (stat, a lookup of an absent name, readdir, mkdir,
-    unlink, truncate by path, fsync on a read-only descriptor): not freed, because the
-    Volume's lock is held across the commit and the lock does not honour a request's
-    context. This needs a lock that does, in the deadlines change;
-  * read, create, truncate and write, and fsync on a descriptor: not freed. The
-    caller's exit closes its descriptor, which sends the kernel's flush, which waits for
-    the same commit; close and exit are not freed behind a stalled commit either;
-  * killing the daemon frees every caller at once (the connection ends, 20 ms) and loses
-    what was not committed.
-  Memory: the FUSE library holds about 134 KiB for each abandoned request until its
-  handler returns. 1,600 reads at distinct offsets, 1,600 more through the page cache and
-  3,000 distinct lookups took the daemon from 16.8 MB to 831 MB; nothing panicked and the
-  data was intact when the store resumed. Bounding what a handler allocates does not change
-  it. Only answering the abandoned requests frees them, which is what a deadline on the
-  store does, and it is the next change.
+* **A stalled store does not stall the callers that do not need it, and a request has no
+  deadline.** The writer holds no lock across a request of the store or a call that waits for the
+  journal's disk, so with a request held (the Head, a shard, a pack, a read of a chunk) a stat,
+  a lookup, a readdir, a create, a write, an fsync and a read of other files complete as usual.
+  What needs the store itself still waits for it: a read of a chunk or a shard that is not held,
+  and a flush. No request has a deadline, no call is answered "interrupted" (section 8), and a
+  killed caller that waits on the store stays in the kernel until the store answers, except:
+  * a cold lookup, stat and readdir of a name not yet read: freed in about 3 s, the grace after
+    which an interrupted request that changes nothing is answered "interrupted";
+  * killing the daemon frees every caller at once (the connection ends, 20 ms) and loses what
+    the journal on that node does not hold.
+  Memory: the FUSE library holds about 134 KiB for each abandoned request until its handler
+  returns. Only answering the abandoned requests frees them, which a deadline on the store does.
+  The publisher has no deadline either: a publication blocked on a request that is never answered
+  stays blocked until the writer is closed, and the state says so.
 * **Before a tenant is given a mount**, the supervisor must: watch the store's latency and
   kill the daemon when it does not answer (callers are freed in 20 ms; what the daemon had
   not committed is lost); set `pids.max` and a memory limit for the mount's callers and for
   the daemon (about 134 KiB for each stuck request); and unmount lazily at teardown
   (`fusermount3 -u -z`), because a mount in use refuses a plain unmount.
-* **SIGTERM** commits what the daemon holds, asks for the unmount, and if something holds the
-  mount open says so, asks again for 5 s and then detaches it lazily and ends within 3 s
-  more. What a holder writes after the commit is lost with the connection. The commit at
-  the end has a deadline of 3 s: when the store has stopped answering, the daemon says that
-  the last commit did not finish and that what it held may be lost (its request may be at
-  the store already), and exits non-zero; it does not wait for the Volume's lock, which a
-  stalled commit keeps. With a stalled store the whole of it takes up to 21 s: 10 s for the
-  commit, 5 s of asking for the unmount when something holds the mount, 3 s for the kernel
-  to let Serve go, 3 s for the last commit. A supervisor whose kill timer is shorter than
-  that never sees the line "unmounting without the commit" (printed at 10 s) or the exit
-  status, and one that escalates to SIGKILL, or kills at once, loses what was not
-  committed.
-* **Every close is a full commit** (section 8): about 143 files per second and 5.7 objects
-  per file in `cp -r` and in a checkout through the mount, against about 0.04 objects per
-  file for the same files written and committed once.
+* **SIGTERM** has the kernel hand its cached writes to the daemon (syncfs) and publishes what the
+  daemon holds, asks for the unmount, and if something holds the mount open says so, asks again
+  for 5 s and then detaches it lazily and ends within 3 s more. What a holder writes after is in
+  the journal and not in the store. The publication at the end has a deadline of 3 s: when the
+  store has stopped answering, the daemon says that the last publication did not finish and that
+  what it lacks is in this node's journal, and exits non-zero. With a stalled store the whole of
+  it takes up to 21 s. A supervisor that kills at once loses nothing the journal holds: the next
+  mount on the node publishes it; only a lost node loses it.
+* **The unpublished tail lives on one disk.** What the store has not taken is on this node's
+  journal and nowhere else. A journal is never restored from a backup or copied between nodes.
+  A node lost for good loses the changes of the last bound, and a takeover elsewhere says so.
+* **A burst larger than memory waits for the store.** A writer holds the changes the store lacks
+  in memory (`Config.Dirty`, 1 GiB by default) as well as in the journal; past that a change waits
+  for a publication, so a burst bigger than the memory bound runs at the speed the store takes it.
+* **Closes no longer commit** (section 8): a close and a flush on a mount ask the store for
+  nothing, and a generation holds every change of the last few seconds, so a tree of many
+  small files costs a fraction of an object per file (measured 0.15 objects per file for 82,000
+  files of 1 to 16 KiB).
 * **Not built:** rename, hard links, symbolic links, chmod, chown, utimens, extended
   attributes, statfs, and a read of a file that was unlinked while open. `git`, editors that
   save by renaming, `tar` and `npm` fail on them. A read of an unlinked open file answers
