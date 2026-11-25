@@ -34,8 +34,8 @@ jobs:
           - 'fuzz-head'
           - '!realserver,realserver-cas,realserver-cas-large,realserver-kill,check,unit,race,model,sparse,sparse-tiny,sqlite,scale-a,scale-b,scale-c,fuzz-head'
     # The reusable workflow runs with write permissions and a token, so it is named by the
-    # commit that the tag v2 pointed to when this was written, not by the tag, which moves.
-    uses: hanzoai/ci/.github/workflows/build.yml@de2a627ecac0c014a97bf61e37dce86de4f259fd
+    # commit that the tag v2 (v2.1.25) pointed to when this was written, not by the tag, which moves.
+    uses: hanzoai/ci/.github/workflows/build.yml@b6c4cf81380d3870fab842161e758d34554af849
     with:
       gates: ${{ matrix.gates }}
       # A pull request only reads the Go cache store and finds it empty until a push
