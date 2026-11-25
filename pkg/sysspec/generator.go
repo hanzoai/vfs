@@ -932,19 +932,18 @@ func AuditMutationsJSON(raw []byte) (MutationAudit, error) {
 			byDomain["journal"]++
 		case e.File == "pkg/fence/fence.go":
 			byDomain["fence"]++
-		case e.File == "head.go" || e.File == "cipher.go" || e.File == "codec.go" || e.File == "verify.go":
+		case e.File == "head.go" || e.File == "cipher.go" || e.File == "codec.go" || e.File == "verify.go" || e.File == "check.go":
 			byDomain["corruption_sealing_codec"]++
-		case e.File == "volume.go":
+		case e.File == "volume.go" || e.File == "generation.go" || e.File == "ledger.go":
 			byDomain["publication_volume"]++
-		case e.File == "tree.go" || e.File == "chunk.go" || e.File == "pack.go" || e.File == "shard.go" || e.File == "record.go" || e.File == "file.go" || e.File == "ops.go" || e.File == "lru.go":
+		case e.File == "tree.go" || e.File == "chunk.go" || e.File == "pack.go" || e.File == "shard.go" || e.File == "record.go" || e.File == "file.go" || e.File == "ops.go" || e.File == "lru.go" || e.File == "attr.go" || e.File == "namespace.go" || e.File == "rename.go" || e.File == "usage.go":
 			byDomain["tree_chunk_pack_ops"]++
 		default:
 			byDomain["backend_mount_ext"]++
 		}
-		if strings.Contains(e.Name, "journal") && strings.HasPrefix(e.File, "volume.go") {
-			// Single-field preservation check (e.g., Head.Journal carried verbatim);
-			// still single-package without a journal.Journal instance.
-			_ = crossLayer
+		if (e.File == "generation.go" || e.File == "ledger.go" || e.File == "volume.go") &&
+			(strings.Contains(e.Name, "journal") || strings.Contains(e.Name, "ledger") || strings.Contains(e.Name, "landed")) {
+			crossLayer++
 		}
 	}
 	return MutationAudit{
@@ -1120,43 +1119,43 @@ func comparativeCorpus(gen []RegressionCase) []ComparativeCase {
 			WhyDifference: "Caught by J3 and journal unit tests, though absent from tools/mutate/mutations.json.",
 		},
 
-		// Class B: Caught by SYSSPEC specifications, MISSED by existing mutation/fault suites (8 cases).
+		// Class B: Historical pre-v2 negative fixture (B01) and current v2 cross-module / journal gaps.
 		{
 			ID: "B01", Class: ClassSpecOnly, Domain: DomainPublication,
-			Title:       "Lost-ack ABA prolly-root match falsely acknowledges uncommitted Journal/Next watermarks",
-			ExistingRef: "MISSED: volume.go:264 landed() checks only cur.ID == v.id && cur.Root == v.root",
+			Title:       "Historical pre-v2 negative fixture: lost-ack ABA prolly-root match falsely acknowledges uncommitted Journal/Next watermarks",
+			ExistingRef: "HISTORICAL NEGATIVE FIXTURE (fixed in v0.7.0 generation.go:532 landed()); mutation 'generation: any tree with the same root counts as landed' still survives TestAFencedPublicationIsNotRecognisedAsLanded on c3335b1",
 			SpecRule:    "RG8_LostAckLandedChecksFullCommitWatermarks", ExistingCaught: false,
 			Trace:         findGeneratedTrace(gen, "RG8_LostAckLandedChecksFullCommitWatermarks"),
-			WhyDifference: "Prolly tree roots are pure functions of records+Seed; an ABA revert or metadata-neutral journal flush deposed at ErrStaleRound sees equal Root while Head.Journal/Next in store is behind, causing premature journal.Publish/Reclaim.",
+			WhyDifference: "Production v0.7.0 Volume.landed(ctx, Head) now checks cur.ID == h.ID && cur.Root == h.Root && cur.Journal == h.Journal, so B01 is retained strictly as a historical negative fixture; relaxing landed() to 'return cur, err == nil' still survives TestAFencedPublicationIsNotRecognisedAsLanded because Flush fails on the next publisher tick while silently calling j.Publish(g.seq), whereas RG8/RG2 catch it immediately.",
 		},
 		{
-			ID: "B02", Class: ClassSpecOnly, Domain: DomainPublication,
+			ID: "B02", Class: ClassBothCatch, Domain: DomainPublication,
 			Title:       "Publisher commits Head.Journal = g before local journal Sync reaches g",
-			ExistingRef: "MISSED: no cross-package Volume+Journal test in unit/mutate gates",
-			SpecRule:    "RG1_JournalToPublisherDurableGate", ExistingCaught: false,
+			ExistingRef: "CAUGHT in v0.7.0: mutations.json 'generation: the journal is not made durable before the Head' + TestHeadWaitsForTheJournalToBeDurable",
+			SpecRule:    "RG1_JournalToPublisherDurableGate", ExistingCaught: true,
 			Trace:         findGeneratedTrace(gen, "RG1_JournalToPublisherDurableGate"),
-			WhyDifference: "Each package passes its own unit tests (Head marshals any uint64; journal allows Visible > Durable), but cross-module Rely/Guarantee RG1 catches store publication ahead of NVMe durability.",
+			WhyDifference: "Converged on v0.7.0: both RG1 and generation.go's syncTo(ctx, g.seq) mutation test (TestHeadWaitsForTheJournalToBeDurable) catch store publication ahead of local journal durability.",
 		},
 		{
-			ID: "B03", Class: ClassSpecOnly, Domain: DomainJournal,
+			ID: "B03", Class: ClassBothCatch, Domain: DomainJournal,
 			Title:       "Publisher calls journal.Publish(g) after shard upload but before Head CAS succeeds",
-			ExistingRef: "MISSED: journal/model_test.go has no Head CAS; mutations.json has 0 journal entries",
-			SpecRule:    "RG2_PublisherToJournalPostCommitAdvance", ExistingCaught: false,
+			ExistingRef: "CAUGHT in v0.7.0: mutations.json 'generation: the journal is told before the Head commits' + TestJournalIsToldAfterTheHead",
+			SpecRule:    "RG2_PublisherToJournalPostCommitAdvance", ExistingCaught: true,
 			Trace:         findGeneratedTrace(gen, "RG2_PublisherToJournalPostCommitAdvance"),
-			WhyDifference: "Locally valid in journal (Durable >= g), but if fence.Put(head) conflicts or is fenced, Reclaim wipes unpublished records that never reached the store.",
+			WhyDifference: "Converged on v0.7.0: both RG2 and generation.go's post-commit Publish mutation test (TestJournalIsToldAfterTheHead) catch advancing journal.Publish before Head CAS succeeds.",
 		},
 		{
 			ID: "B04", Class: ClassSpecOnly, Domain: DomainJournal,
 			Title:       "Takeover opens local journal with Volume.ID lineage only, omitting Round",
-			ExistingRef: "MISSED: journal lineage is opaque []byte to journal.Open",
+			ExistingRef: "MISSED: journal lineage is opaque []byte to journal.Open; ledger.go has 0 lineage mutations",
 			SpecRule:    "RG4_TakeoverRotatesJournalLineage", ExistingCaught: false,
 			Trace:         findGeneratedTrace(gen, "RG4_TakeoverRotatesJournalLineage"),
-			WhyDifference: "journal.Open treats Lineage as opaque bytes; only modular contract RG4 enforces binding (Volume.ID, Round) across fence takeover.",
+			WhyDifference: "journal.Open treats Lineage as opaque bytes and tools/mutate has no lineage mutation on ledger.go; modular contract RG4 enforces binding (Volume.ID, Round) across fence takeover.",
 		},
 		{
 			ID: "B05", Class: ClassSpecOnly, Domain: DomainJournal,
 			Title:       "Mount retries journal.Open with Published=0 after ErrMismatch",
-			ExistingRef: "MISSED: caller-side retry policy across Volume and journal.Open",
+			ExistingRef: "MISSED: caller-side retry policy across Volume and journal.Open has 0 mutations",
 			SpecRule:    "RG5_OpenNeverRetriesMismatchWithZero", ExistingCaught: false,
 			Trace:         findGeneratedTrace(gen, "RG5_OpenNeverRetriesMismatchWithZero"),
 			WhyDifference: "Calling journal.Open(..., Published: 0) is legal in isolation on an unfloored log, but after ErrMismatch against Head.Journal it replays a divergent history instead of falling back to Head.",
@@ -1172,7 +1171,7 @@ func comparativeCorpus(gen []RegressionCase) []ComparativeCase {
 		{
 			ID: "B07", Class: ClassSpecOnly, Domain: DomainPublication,
 			Title:       "Backend serves stale valid Head.Seq below caller's previously observed SeenSeq",
-			ExistingRef: "MISSED: LLM.md notes single-Head open cannot detect rollback without caller Seq state",
+			ExistingRef: "MISSED: single-Head open cannot detect rollback without caller Seq state",
 			SpecRule:    "P3_HeadSeqStrictlyNonRepeating", ExistingCaught: false,
 			Trace: func() Trace {
 				pre := BaselineValidState()
@@ -1192,10 +1191,10 @@ func comparativeCorpus(gen []RegressionCase) []ComparativeCase {
 		{
 			ID: "B08", Class: ClassSpecOnly, Domain: DomainJournal,
 			Title:       "Source mutations inside journal/ (Sync barrier, Floor order, Due anchor) under tools/mutate",
-			ExistingRef: "MISSED by tools/mutate: 0 of 250 entries in tools/mutate/mutations.json target journal/",
+			ExistingRef: "MISSED by tools/mutate: 0 of 398 entries in tools/mutate/mutations.json target journal/",
 			SpecRule:    "CC1_SyncGroupBarrierEpoch", ExistingCaught: false,
 			Trace:         findGeneratedTrace(gen, "CC1_SyncGroupBarrierEpoch"),
-			WhyDifference: "tools/mutate has 100% kill rate on its 250 root/pkg entries but 0 mutations in journal/, leaving regressions in journal/pipeline.go or due.go invisible to `go run ./tools/mutate`.",
+			WhyDifference: "tools/mutate covers 398 root/pkg entries on c3335b1 but 0 entries in journal/, leaving regressions in journal/pipeline.go or due.go invisible to `go run ./tools/mutate`.",
 		},
 
 		// Class C: Caught by existing mutation/fault/syscall tests, MISSED by abstract SYSSPEC specs (6 cases).

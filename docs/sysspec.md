@@ -1,8 +1,8 @@
 # Machine-checkable storage specifications (SYSSPEC)
 
 Refs #56. Tracked by HIP-1349. The library is `pkg/sysspec`, the CLI evaluator
-is `tools/sysspec`, and the live engine bridge tests are in `sysspec_test.go`
-and `pkg/sysspec/spec_test.go`.
+is `tools/sysspec`, and the live VFS v2 engine bridge tests are in
+`sysspec_test.go` and `pkg/sysspec/spec_test.go`.
 
 ## 1. Primary reference, summary, and license audit
 
@@ -30,12 +30,15 @@ and `pkg/sysspec/spec_test.go`.
   implementation authored specifically for `hanzoai/vfs` using only the Go
   standard library and existing `vfs` packages (`go.mod` and `go.sum` are
   untouched; zero patent or third-party notice additions). Canonical
-  architecture (`vfs -> Hanzo S3 -> Visor`) is unchanged.
+  architecture (`vfs -> Hanzo S3 -> Visor`) is unchanged; SYSSPEC is regression
+  verification infrastructure over the current VFS v2 `Volume` lifecycle, not a
+  new filesystem or separate runtime.
 
-## 2. Reproducible upstream baseline
+## 2. Reproducible baseline against current `main` (`v0.7.0` + `#89`, `c3335b13`)
 
-All measurements below were collected on `hanzoai/vfs` `main` using `go1.27.4
-linux/amd64` (`x86_64`) prior to adding `pkg/sysspec`:
+All mutation inventory and kill measurements below were collected against
+`hanzoai/vfs` `main` commit `c3335b13a6204b160898afe3235d7bea0f9b44e9`
+(`v0.7.0` journaled `Volume` + `#89`):
 
 ```sh
 # 1. Static build, vet, cross-compile (darwin/arm64 CGO_ENABLED=0), and gofmt gate
@@ -46,224 +49,155 @@ GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go build . ./cmd/... ./pkg/... ./tools/..
 GOOS=darwin GOARCH=arm64 CGO_ENABLED=0 go vet -tags fuse ./pkg/mount
 test -z "$(gofmt -l .)"
 
-# 2. Unit, model, internal race, and journal suites
-go test -short -count=1 -skip '^Test(Sparse|Model|TreeForced)' . ./cmd/... ./pkg/... ./internal/storetest
-go test -short -count=1 -run '^Test(Sparse|Model|TreeForced)' .
-go test -race -count=1 -timeout 4m ./internal/blake3 ./internal/bufpool
-go test -short -count=1 ./journal
-
-# 3. Existing mutation corpus audit
+# 2. SYSSPEC package and live v2 Volume lifecycle trace suites under -race
+go test -race -count=1 ./pkg/sysspec/...
+go test -race -count=1 -run '^TestSysSpec' .
 go run ./tools/sysspec -mutations tools/mutate/mutations.json
+
+# 3. Existing mutation corpus verification on current main (c3335b13)
+for pat in 'generation:' 'ledger:' 'fence:' 'volume:' 'reseal:' 'budget:' 'head:'; do
+  go run ./tools/mutate -j 6 -timeout 25s -only "$pat"
+done
 ```
 
-Upstream mutation inventory (`tools/mutate/mutations.json`, 250 entries across
-22 files):
+### Upstream mutation corpus inventory (`tools/mutate/mutations.json` on `c3335b13`, 398 entries across 29 files)
 
 | Subsystem category | Files | Mutations in `mutations.json` | Share |
 |---|---|---:|---:|
-| Corruption, sealing, codec, verify | `head.go`, `cipher.go`, `codec.go`, `verify.go` | 53 | 21.2% |
-| Fencing (`pkg/fence`) | `pkg/fence/fence.go` | 15 | 6.0% |
-| Publication & Volume lifecycle | `volume.go` | 29 | 11.6% |
+| Corruption, sealing, codec, verify, check | `head.go`, `cipher.go`, `codec.go`, `verify.go`, `check.go` | 62 | 15.6% |
+| Fencing (`pkg/fence`) | `pkg/fence/fence.go` | 18 | 4.5% |
+| Publication, Generation & Volume ledger | `volume.go` (30), `generation.go` (24), `ledger.go` (1) | 55 | 13.8% |
 | Journal (`journal/*`) | `journal/*.go` | 0 | 0.0% |
-| Prolly tree, FastCDC, packs, records | `tree.go`, `chunk.go`, `pack.go`, `shard.go`, `record.go`, `file.go`, `ops.go`, `lru.go` | 61 | 24.4% |
-| Backends, FUSE mount, extensions | `pkg/backend/*`, `pkg/mount/*`, `ext.go`, `internal/storetest/mem.go` | 92 | 36.8% |
-| **Total** | **22 files** | **250** | **100.0%** |
+| Prolly tree, FastCDC, packs, records, namespace | `tree.go`, `chunk.go`, `pack.go`, `shard.go`, `record.go`, `file.go`, `ops.go`, `lru.go`, `attr.go`, `namespace.go`, `rename.go`, `usage.go` | 143 | 35.9% |
+| Backends, FUSE mount, extensions | `pkg/backend/*`, `pkg/mount/*`, `ext.go`, `internal/storetest/mem.go` | 120 | 30.2% |
+| **Total** | **29 files** | **398** | **100.0%** |
 
-Two structural facts stand out in the baseline:
+### Mutation kills against current `main` (`c3335b13`)
 
-1. `tools/mutate` has strong single-file coverage of `head.go`, `volume.go`,
-   `cipher.go`, and `pkg/fence/fence.go`, but **0 of 250 mutations** target
-   `journal/`.
-2. `journal/` has its own standalone randomized model (`journal/model_test.go`)
-   and crash explorer (`journal/crash`), while `vfs` root has `crash_test.go`
-   and `fence_test.go`, but **zero tests or mutations exercise the cross-module
-   contract between `Volume`, `pkg/fence`, and `journal`**.
+Running the existing `tools/mutate` suite (preserved unmodified) across the 67
+core storage-specification mutations (`generation:`, `ledger:`, `fence:`,
+`volume:`, `reseal:`, `budget:`, `head:`) on `c3335b13` yields **57 killed, 7
+survived, 3 build-broken**:
 
-## 3. Falsifiable hypothesis and metrics
+| Filter | Total | Killed | Survived | Build-broken | Notes on `c3335b13` |
+|---|---:|---:|---:|---:|---|
+| `fence:` | 15 | 15 | 0 | 0 | 100% killed |
+| `head:` | 10 | 10 | 0 | 0 | 100% killed |
+| `reseal:` | 8 | 8 | 0 | 0 | 100% killed |
+| `generation:` | 13 | 10 | 2 | 1 | Survived: `any tree with the same root counts as landed`, `removed file keeps its data records`; Build: `a Flush is answered by an earlier generation` |
+| `volume:` | 17 | 12 | 4 | 1 | Survived: `a full journal is refused though a publication drains it`, `removed file stays openable`, `a fenced Volume answers sync with an error`, `an owner that still holds its journal is not told it was fenced`; Build: `a journal with an unpublished tail is retired on close` |
+| `budget:` | 3 | 2 | 1 | 0 | Survived: `a Volume that holds nothing waits for a spent Budget` |
+| `ledger:` | 1 | 0 | 0 | 1 | Build: `a sealed record is the plaintext` |
+| `journal/*` | 0 | 0 | 0 | 0 | `0 / 398` mutations in `mutations.json` target `journal/` |
+| **Subtotal (core specs)** | **67** | **57** | **7** | **3** | Existing mutation tests preserved intact |
 
-* **Hypothesis:** Encoding the journal, fencing, corruption, and publication
-  invariants of `vfs` as an executable three-layer SYSSPEC DAG (state
-  invariants, transition rules, Rely/Guarantee module contracts, and
-  concurrency barrier rules) and generating trace regressions from them will:
-  1. Detect **100%** of injected cross-module `Volume <-> journal <-> fence`
-     protocol violations and `journal/` watermark/barrier regressions that
-     `tools/mutate` and isolated package tests miss (`ClassSpecOnly`).
-  2. Exhibit a well-defined **negative boundary (`0%` detection on abstract
-     state traces, `ClassExistingOnly`)** on byte-level algorithmic cuts
-     (FastCDC gear seed derivation, prolly boundary keying), kernel syscall
-     ordering (`ptrace` `fdatasync -> rename -> fsync(dir)`), FUSE signal
-     cancellation (`EINTR`), and post-`SIGKILL` bitrot inside the 16-round
-     `through`-mark lag window, where existing AST/byte mutations and syscall
-     tests remain strictly necessary.
-* **Metrics:**
-  1. Rule count and generated regression verdict accuracy (`%` exact rule match
-     with `0` false positives on randomized valid multi-step traces).
-  2. Bidirectional differential counts across a 24-case fault corpus:
-     `both_catch` (`Class A`), `sysspec_only` (`Class B`), and `existing_only`
-     (`Class C`).
-  3. End-to-end specification evaluation latency (`us`).
-
-## 4. Clean-room implementation
+## 3. Clean-room implementation and live VFS v2 `Volume` lifecycle traces
 
 `pkg/sysspec` organizes the four required domains into a verified topological
 DAG (`corruption <- fence <- publication <- journal`) containing **38
 machine-checkable rules**:
 
-* **11 State Invariants (`LayerFunctionality`):**
-  * `C1_InjectiveSealingContext`: length-framed BLAKE3 context domain
-    separation across `head` (`place`), `shard` (`volumeID`), and `chunk`
-    (`volumeID`, `chunkID`).
-  * `C2_CanonicalShortestVarint`: non-minimal varints fail closed as
-    `ErrCorrupt`.
-  * `C3_NeedsCheckedBeforeTail`: unknown `Head.Needs` bits return `ErrNeeds`
-    before `Tail` validation (`ErrCorrupt`).
-  * `C4_HeadTailStrictAscendingBounded`: at most 256 whole TLV fields in
-    strictly ascending tag order, carrying every set `Needs` bit.
-  * `C5_HeadSizeWithinFenceCeiling`: fenced `Head` never exceeds 65,536 bytes;
-    oversized writes return `ErrTooLarge` without mutating the store.
-  * `C6_CipherRejectsPlaintextOrPartialTag`: cipher never outputs raw plaintext
-    and verifies all 32 authentication tag bytes.
-  * `C7_ExtentChunkAndPackBounds`: full copy verification rejects missing
-    chunk-table entries and packs truncated short of their furthest chunk.
-  * `F1_RoundBoundsValid`: attached writer rounds lie strictly in
-    `(0, 2^64 - 1)`.
-  * `P2_OrphansNeverReferencedBeforeHeadCAS`: every shard and pack reachable
-    from committed `Head` is uploaded prior to Head CAS; failed Flushes leave
-    only unreferenced orphans.
-  * `J1_MonotoneWatermarks`, `J2_ContiguousSequenceNoGaps`: `Published <=
-    Durable <= Visible`, `Proven <= Durable`, `UsedBytes <= CapacityBytes`, and
-    contiguous unpublished suffix `(Published+1 .. Visible)`.
-* **15 Transition Rules (`LayerFunctionality`):**
-  * `C8_JournalProvenDamageFailsClosed`: damage at or below a surviving
-    `through` mark (`Proven > Published`) fails `Open` as `ErrCorrupt`.
-  * `F2_PutRequiresAtLeastRecordedRound`, `F3_ClaimRequiresStrictlyHigherRound`,
-    `F4_TakeoverPreservesLatestPayload`, `F5_DeposedWriterPermanentlyFenced`,
-    `F6_LostAckTokenIdempotence`.
-  * `P1_WriteOrderPacksShardsBeforeHead`, `P3_HeadSeqStrictlyNonRepeating`,
-    `P4_HeadIdentityAndUnknownFieldsCarried`, `P5_CleanFlushMakesZeroStoreWrites`.
-  * `J3_PublishRequiresDurable`, `J4_ReclaimPreservesUnpublishedAndFloor`,
-    `J5_OpenRefusesLineageFormatAndFloorMismatch`, `J6_AppendMonotoneSequence`,
-    `J7_DeadlineAnchoredToOldestUnpublished`.
-* **8 Cross-Module Rely/Guarantee Contracts (`LayerModularity`):**
-  * `RG1_JournalToPublisherDurableGate`: publisher commits `Head.Journal = g`
-    only when `journal.Marks().Durable >= g`.
-  * `RG2_PublisherToJournalPostCommitAdvance`: publisher calls
-    `journal.Publish(g)` only after `Head` carrying `Journal >= g` commits in
-    the store.
-  * `RG3_PublisherToFenceAtomicHeadCAS`: `Flush` commits `Head` solely through
-    `fence.Put` at the claimed `Round`.
-  * `RG4_TakeoverRotatesJournalLineage`: takeover binds local journal `Lineage`
-    to `(Volume.ID, Round)`.
-  * `RG5_OpenNeverRetriesMismatchWithZero`: `ErrMismatch`/`ErrLineage`/`ErrCorrupt`
-    from `journal.Open` falls back to store `Head` and never retries
-    `Published = 0`.
-  * `RG6_BulkSpoolDurableBeforeOrderedLogRef`: side bulk spool (`> 64 KiB`) is
-    synced before appending its reference record to the ordered journal.
-  * `RG7_ResealVerifiesRootShardUnderTargetVolume`: `Reseal` opens the root
-    shard under `Head.ID` at the target backend before rewriting `Head`.
-  * `RG8_LostAckLandedChecksFullCommitWatermarks`: lost-ack recovery on
-    `ErrStaleRound` checks `Next` and `Journal` watermarks in addition to `ID`
-    and `Root`.
-* **4 Concurrency Rules (`LayerConcurrency`):**
-  * `CC1_SyncGroupBarrierEpoch` (`Sync(seq)` requires sync flight started after
-    `seq` was written), `CC2_ReplayBlocksReclaim`, `CC3_FlushExclusiveHold`,
-    and `CC4_SingleConditionalWriteNoAdmitWindow`.
+* **11 State Invariants (`LayerFunctionality`):** `C1`–`C7`, `F1`, `P2`, `J1`, `J2`.
+* **15 Transition Rules (`LayerFunctionality`):** `C8`, `F2`–`F6`, `P1`, `P3`–`P5`, `J3`–`J7`.
+* **8 Cross-Module Rely/Guarantee Contracts (`LayerModularity`):** `RG1`–`RG8`.
+* **4 Concurrency Rules (`LayerConcurrency`):** `CC1`–`CC4`.
 
 `GenerateRegressionSuite(seed)` synthesizes **52 deterministic regression
 traces** (14 valid multi-step/boundary histories + 38 targeted single-rule
-violations covering all 38 rules across the four domains and three SYSSPEC
-layers). `sysspec_test.go` bridges real
-`vfs.Volume`, `parseHead`, `seal`/`unseal`, `pkg/fence.Store`, and
-`journal.Journal` (`journal/crash.Disk`) executions directly into
-`Registry.CheckTrace`.
+violations covering all 38 rules). `sysspec_test.go` verifies real VFS v2
+`Volume` executions directly against `Registry.CheckTrace` / `CheckStep`:
 
-## 5. Correctness, concurrency, security, and live engine findings
+1. **`TestSysSpecRealFlushWriteOrderAndOrphanSafety`:** clean no-op `Flush`
+   (`P5`), chunked + small writes with injected Head failure, pack -> shard ->
+   Head write order (`P1`), orphan safety (`P2`), and strict `Head.Seq`
+   non-repetition (`P3`).
+2. **`TestSysSpecRealCorruptionAndContextDomainSeparation`:** real `seal`/`unseal`,
+   `unmarshalHead`, and `fence.Store` against `C1`, `C2`, `C3`, `C5`.
+3. **`TestSysSpecRealJournalFenceVolumeCrossLayerContract`:** live v2 `Volume`
+   journal watermarks, `RG4` lineage rejection (`lineage(id, round)`) on Round 1's
+   on-disk journal opened under Round 2, plus the **historical pre-v2 B01
+   negative fixture** (confirming both that v0.7.0 `Volume.landed(ctx, Head)`
+   rejects ABA `Journal` mismatch and that `RG8` still catches injected pre-v2
+   false positives).
+4. **`TestSysSpecRealV2CrashReopenTrace`:** real v2 `Volume` local mutations +
+   `Sync` (0 store writes), un-flushed process exit, refused Round 2 reopen
+   leaving the local journal intact, and Round 3 same-node replay + publication
+   verified against `Recovery()`, read-only `Open`, and `Registry.CheckTrace`.
+5. **`TestSysSpecRealV2FencingTakeoverTrace`:** real v2 `Volume` Round 1 commit,
+   equal-round `Attach` refusal (`F3`), unpublished local tail, cross-node Round 2
+   takeover preserving `Head` payload (`F4`) and rotating lineage (`RG4`),
+   permanent fencing of the deposed writer (`F2`/`F5`/`RG3`) without falsely
+   advancing `State().Published` past `Head.Journal` (`RG2`), and successor commit.
+6. **`TestSysSpecRealV2MonotonicPublicationTrace`:** multi-generation explicit
+   `Flush` (with injected Head failure + retry) plus controlled-clock
+   `Config.Bound` background publication, asserting strict monotonicity of
+   `Head.Seq`, `Head.Journal`, `Head.Next`, and journal watermarks (`J1`/`J2`/`P3`/`P4`).
+7. **`TestSysSpecRealV2BoundedBackpressureTrace`:** real v2 `Volume` under tight
+   `JournalCapacity` (8 MiB) and `Dirty` (1 MiB): healthy early-publication drain,
+   S3 outage hitting bounded `ErrFull` without mutating `Visible` (`J6`) while
+   maintaining `Degraded=true`, `Backlog <= JournalCapacity` (`J1`), and working
+   local `Sync`, followed by recovery drain and exact store verification.
 
-1. **Real cross-layer finding on `Volume.landed()` (`volume.go:264`, `B01` /
-   `RG8`):**
-   `Volume.landed()` currently decides whether a fenced `Flush` had already
-   landed with a lost acknowledgement via:
-   ```go
-   return cur, err == nil && cur.ID == v.id && cur.Root == v.root
-   ```
-   Because prolly tree node boundaries and hashes are a pure function of the
-   record set and `Head.Seed`, an ABA sequence (or a journal-backed commit that
-   advances `Head.Journal` on an unchanged metadata root) deposed by a
-   successor at an older `Head.Journal` observes `cur.ID == v.id && cur.Root ==
-   v.root` while `cur.Journal < targetJournal` (or `cur.Next < workingNext`).
-   `TestSysSpecRealJournalFenceVolumeCrossLayerContract` reproduces this on a
-   live `vfs.Volume` + `journal.Journal`: `v1.landed(ctx)` returns `true` when
-   the store holds `Head.Journal = 2` and `v1` attempted `Journal = 3`, which
-   would trick a publisher into calling `journal.Publish(3)` + `Reclaim()` and
-   destroying unpublished record `3`. When connecting `journal` to `Volume`
-   (#57), `landed()` should require `cur.Next >= uint64(v.next) && cur.Journal
-   >= targetJournal`, and the clean-Flush fast path (`volume.go:229`) should
-   also check that `Head.Journal` needs no advance.
-2. **Lineage rotation across takeover (`B04` / `RG4`):**
-   Verified on live `journal.Open` that binding `Lineage` to `Volume.ID ||
-   Round` causes a successor at `Round = 2` to reject a predecessor's local
-   segment directory with `journal.ErrLineage`, whereas passing `Volume.ID`
-   alone silently adopts stale segment files.
-3. **Concurrency and security:**
-   `pkg/sysspec` passes `go test -race` with 12 concurrent trace-checking
-   workers (`TestConcurrentTraceVerificationIsRaceFree`), enforces fail-closed
-   checking on `ErrNeeds`, `ErrCorrupt`, `ErrContext`, `ErrTooLarge`, and
-   `ErrStaleRound`, and compiles cleanly with `CGO_ENABLED=0` on `linux/amd64`
-   and `darwin/arm64`.
+## 4. Historical pre-v2 B01 fixture and current v2 findings
 
-## 6. Bidirectional comparison and raw measurements (HIP-1349)
+1. **Historical pre-v2 B01 negative fixture (`RG8`):**
+   Pre-v2 `Volume.landed()` checked only `cur.ID == v.id && cur.Root == v.root`.
+   In `v0.7.0` (`generation.go:532`), production `Volume.landed(ctx, h)` was
+   fixed to require `cur.ID == h.ID && cur.Root == h.Root && cur.Journal == h.Journal`.
+   Accordingly, B01 is retained **only as a historical negative fixture** in
+   `pkg/sysspec` and `sysspec_test.go`. Notably, on `c3335b13`, relaxing
+   `landed()` to `return cur, err == nil` (`mutations.json` entry `"generation:
+   any tree with the same root counts as landed"`) still survives
+   `TestAFencedPublicationIsNotRecognisedAsLanded` because the deposed writer's
+   `Flush` returns `ErrStaleRound` on the subsequent publisher loop tick while
+   silently calling `j.Publish(g.seq)` — whereas `TestSysSpecRealV2FencingTakeoverTrace`
+   asserts `v1.State().Published == h1.Journal` and catches it directly.
+2. **Convergence of B02 and B03 on `v0.7.0`:**
+   `v0.7.0` landed both `generation.go` durability gating (`syncTo` before Head
+   CAS, `TestHeadWaitsForTheJournalToBeDurable`) and post-commit journal
+   advancement (`TestJournalIsToldAfterTheHead`), so B02 (`RG1`) and B03 (`RG2`)
+   are reclassified to `both_catch` on `c3335b13`.
+3. **Remaining `sysspec_only` gaps (`B04`–`B08`):**
+   `ledger.go` has zero lineage-rotation mutations (`RG4`), caller-side
+   `ErrMismatch` fallback (`RG5`), bulk spool ordering (`RG6`), caller-tracked
+   `SeenSeq` rollback (`P3`), and `journal/` still has `0 / 398` entries in
+   `tools/mutate/mutations.json` (`B08`).
 
-Summary metrics from `go run ./tools/sysspec` and `hanzo.yml` test gates:
+## 5. Bidirectional comparison on current `main` (`c3335b13`)
 
-| Metric | Upstream baseline | With `pkg/sysspec` + `tools/sysspec` |
+| Metric | Current `main` (`c3335b13`) | With `pkg/sysspec` + `tools/sysspec` |
 |---|---:|---:|
-| Structured machine-checkable rules | 0 (prose in `docs/`) | 38 (11 inv, 15 tr, 8 RG, 4 conc) |
+| Structured machine-checkable rules | 0 | 38 (11 inv, 15 tr, 8 RG, 4 conc) |
 | Generated specification regression traces | 0 | 52 (100.0% exact verdict match) |
-| Cross-module `Volume + fence + journal` fault detection (`B01..B08`) | 0 / 8 | 8 / 8 (100.0%) |
-| Shared core invariant fault detection (`A01..A10`) | 10 / 10 | 10 / 10 (100.0%) |
-| Byte/algorithmic/syscall/FUSE implementation faults (`C01..C06`, reverse) | 6 / 6 (100.0%) | 0 / 6 on state traces (by design) |
-| `tools/sysspec` full matrix + 52-trace runtime | n/a | 45.5 ms (45,516 us) |
-| Upstream `unit` / `model` / `internal -race` gates | 154.3 s / 105.9 s / 174.3 s | 100% green (0 regressions) |
+| Live v2 `Volume` lifecycle trace tests | 0 | 7 tests in `sysspec_test.go` (`-race` clean) |
+| Upstream `tools/mutate/mutations.json` entries | 398 (`journal/*`: 0) | 398 (preserved untouched) |
+| Comparative matrix (24 cases) | 12 `both_catch`, 6 `existing_only` | 12 `both_catch`, 6 `sysspec_only`, 6 `existing_only` |
 
 ### Bidirectional case-by-case table
 
 | ID | Class | Domain | SYSSPEC | Existing suite | What happens and why |
 |---|---|---|:---:|:---:|---|
-| A01 | `both_catch` | publication | yes | yes | `Head` written before `pack`/`shard` upload (`P1` and `mutations.json` #25/#26 + `TestFailureAtEveryWrite`). |
-| A02 | `both_catch` | fence | yes | yes | Older round admitted by `fence.Put` (`F2` and `mutations.json` #60 + `TestFenceRefusesOlderRound`). |
-| A03 | `both_catch` | fence | yes | yes | `Attach`/`Reseal` admits equal or `2^64-1` round (`F3` and `mutations.json` #27/#28/#115/#125). |
-| A04 | `both_catch` | publication | yes | yes | `Flush` reuses an attempted `Head.Seq` (`P3` and `mutations.json` #32 + `TestHeadSeqNeverRepeats`). |
-| A05 | `both_catch` | corruption | yes | yes | Cross-place `Head` or cross-volume shard/chunk AAD swap (`C1` and `mutations.json` #41/#42/#90/#91). |
-| A06 | `both_catch` | corruption | yes | yes | Non-minimal varint accepted (`C2` and `mutations.json` #206/#207 + `TestHeadNonMinimalUvarint`). |
-| A07 | `both_catch` | corruption | yes | yes | Malformed `Head.Tail` checked before unknown `Head.Needs` (`C3` and `mutations.json` #205). |
-| A08 | `both_catch` | corruption | yes | yes | Oversized `Head` (`> 65,536` B) written to store (`C5` and `mutations.json` #226-#231). |
-| A09 | `both_catch` | corruption | yes | yes | Pack truncated 1 byte short of furthest chunk passes `Verify` (`C7` and `mutations.json` #174). |
+| A01 | `both_catch` | publication | yes | yes | `Head` written before `pack`/`shard` upload (`P1` and `generation.go` mutations + `TestFailureAtEveryWrite`). |
+| A02 | `both_catch` | fence | yes | yes | Older round admitted by `fence.Put` (`F2` and `pkg/fence/fence.go` mutation + `TestFenceRefusesOlderRound`). |
+| A03 | `both_catch` | fence | yes | yes | `Attach`/`Reseal` admits equal or `2^64-1` round (`F3` and `volume.go` mutations + `TestAttachNeedsAHigherRound`). |
+| A04 | `both_catch` | publication | yes | yes | `Flush` reuses an attempted `Head.Seq` (`P3` and `generation.go` mutation + `TestHeadSeqNeverRepeats`). |
+| A05 | `both_catch` | corruption | yes | yes | Cross-place `Head` or cross-volume shard/chunk AAD swap (`C1` and `head.go`/`cipher.go` mutations). |
+| A06 | `both_catch` | corruption | yes | yes | Non-minimal varint accepted (`C2` and `codec.go` mutations + `TestHeadNonMinimalUvarint`). |
+| A07 | `both_catch` | corruption | yes | yes | Malformed `Head.Tail` checked before unknown `Head.Needs` (`C3` and `head.go` mutations). |
+| A08 | `both_catch` | corruption | yes | yes | Oversized `Head` (`> 65,536` B) written to store (`C5` and `pkg/fence/fence.go` mutations). |
+| A09 | `both_catch` | corruption | yes | yes | Pack truncated 1 byte short of furthest chunk passes `Verify` (`C7` and `verify.go` mutations). |
 | A10 | `both_catch` | journal | yes | yes | `journal.Publish` admitted ahead of `Durable` (`J3` and `journal/published_test.go`). |
-| B01 | `sysspec_only` | publication | **yes** | **no** | **Live finding:** `volume.go:264` `landed()` checks `ID` and `Root` only; ABA/metadata-neutral root match across takeover falsely acknowledges uncommitted `Head.Journal`/`Next` (`RG8`). |
-| B02 | `sysspec_only` | publication | **yes** | **no** | Publisher writes `Head.Journal = g` before local `journal.Marks().Durable >= g` (`RG1`); single-package tests pass independently. |
-| B03 | `sysspec_only` | journal | **yes** | **no** | Publisher calls `journal.Publish(g)` + `Reclaim()` before `fence.Put("head")` succeeds (`RG2`), losing unpublished records on CAS conflict. |
-| B04 | `sysspec_only` | journal | **yes** | **no** | Takeover opens `journal` with `Lineage = Volume.ID` without `Round` (`RG4`), failing to fence deposed local segments. |
-| B05 | `sysspec_only` | journal | **yes** | **no** | Caller retries `journal.Open(..., Published: 0)` after `ErrMismatch` instead of falling back to store `Head` (`RG5`). |
+| B01 | `sysspec_only` | publication | **yes** | **no** | **Historical negative fixture (fixed in v0.7.0 `generation.go:532`):** pre-v2 `landed()` ABA match (`RG8`); relaxing `landed()` still survives `TestAFencedPublicationIsNotRecognisedAsLanded` on `c3335b13`. |
+| B02 | `both_catch` | publication | **yes** | **yes** | Converged in v0.7.0: `RG1` and `"generation: the journal is not made durable before the Head"` (`TestHeadWaitsForTheJournalToBeDurable`). |
+| B03 | `both_catch` | journal | **yes** | **yes** | Converged in v0.7.0: `RG2` and `"generation: the journal is told before the Head commits"` (`TestJournalIsToldAfterTheHead`). |
+| B04 | `sysspec_only` | journal | **yes** | **no** | Takeover opens `journal` with `Volume.ID` without `Round` (`RG4`); `ledger.go` has 0 lineage mutations. |
+| B05 | `sysspec_only` | journal | **yes** | **no** | Caller retries `journal.Open(..., Published: 0)` after `ErrMismatch` (`RG5`). |
 | B06 | `sysspec_only` | journal | **yes** | **no** | Ordered journal appends metadata naming `> 64 KiB` bulk spool entry before spool `Sync` (`RG6`). |
-| B07 | `sysspec_only` | publication | **yes** | **no** | Store replays an older valid `Head.Seq` below caller's `SeenSeq` (`P3`); single-Head signature/AAD checks pass. |
-| B08 | `sysspec_only` | journal | **yes** | **no** | Mutations in `journal/` (`Sync` barrier epoch `CC1`, `Floor` order `J4`, `Due` anchor `J7`) survive `go run ./tools/mutate` (`0/250` journal entries). |
-| C01 | `existing_only` | corruption | **no** | **yes** | FastCDC gear ignores `Head.Seed` or skips `minChunk` (`mutations.json` #8-#10): state invariants hold, chunk-length privacy breaks. |
-| C02 | `existing_only` | publication | **no** | **yes** | Unkeyed prolly boundary hash (`mutations.json` #92): Merkle tree stays functionally valid while adversarial filenames bloat 4 shards to 2,007. |
-| C03 | `existing_only` | publication | **no** | **yes** | FUSE handlers run on `req.Context` instead of `context.WithoutCancel` (`mutations.json` #116-#120): kernel/C `EINTR` bug outside storage state model. |
-| C04 | `existing_only` | journal | **no** | **yes** | Missing `fdatasync -> rename -> fsync(dir)` syscall order (`journal/trace_linux_test.go` A20 `ptrace`): hidden above atomic `Disk.Create` abstraction. |
-| C05 | `existing_only` | corruption | **no** | **yes** | URL parse error leaks credentials (`mutations.json` #97/#108/#109 + `TestRedaction`): string-hygiene bug invisible to state transitions. |
-| C06 | `existing_only` | journal | **no** | **yes** | Sector bitrot in last `<= 16` sync rounds before `SIGKILL` (`journal/cadence_test.go` A25): `Proven` lags `Durable` by design unless `markRounds = 1`. |
-
-### Integration recommendation (HIP-1349)
-
-1. **Keep SYSSPEC and `tools/mutate` as orthogonal gates:** SYSSPEC catches
-   multi-step cross-module Rely/Guarantee violations (`B01..B08`) in under 1 ms
-   without recompiling the repository 250 times, while `tools/mutate`,
-   `spec_test.go`, and `ptrace` syscall tests catch low-level cryptographic,
-   chunking, FUSE-context, and filesystem-durability bugs (`C01..C06`) that
-   abstract specifications cannot see.
-2. **Wire `Registry.CheckStep` into the `#57` Volume-journal integration:**
-   tighten `Volume.landed()` (`volume.go:264`) and `Flush()` (`volume.go:229`)
-   to enforce `RG8` (`cur.Journal >= targetJournal && cur.Next >= workingNext`),
-   enforce `RG4` (`Lineage = Volume.ID || Round`), and add `journal/` entries to
-   `tools/mutate/mutations.json` alongside `pkg/sysspec`.
+| B07 | `sysspec_only` | publication | **yes** | **no** | Store replays an older valid `Head.Seq` below caller's `SeenSeq` (`P3`). |
+| B08 | `sysspec_only` | journal | **yes** | **no** | `0 / 398` entries in `tools/mutate/mutations.json` target `journal/` (`CC1`/`J4`/`J7`). |
+| C01 | `existing_only` | corruption | **no** | **yes** | FastCDC gear ignores `Head.Seed` or skips `minChunk` (`chunk.go` mutations). |
+| C02 | `existing_only` | publication | **no** | **yes** | Unkeyed prolly boundary hash (`tree.go` mutation + `TestGroundNamesDoNotBloatTheTree`). |
+| C03 | `existing_only` | publication | **no** | **yes** | FUSE handlers run on `req.Context` instead of `context.WithoutCancel` (`pkg/mount` mutations). |
+| C04 | `existing_only` | journal | **no** | **yes** | Missing `fdatasync -> rename -> fsync(dir)` syscall order (`journal/trace_linux_test.go` `ptrace`). |
+| C05 | `existing_only` | corruption | **no** | **yes** | URL parse error leaks credentials (`pkg/backend/backend.go` mutations + `TestRedaction`). |
+| C06 | `existing_only` | journal | **no** | **yes** | Sector bitrot in last `<= 16` sync rounds before `SIGKILL` (`journal/cadence_test.go`). |
