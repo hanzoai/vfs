@@ -288,7 +288,7 @@ func (idx *Index) Lookup(dir vfs.InodeID, name string) (vfs.Inode, error) {
 		if es.fp == fp && int(es.entryIdx) < len(idx.dirEntries) {
 			de := idx.dirEntries[es.entryIdx]
 			if de.parentIno == dir && int(de.nameLen) == len(name) &&
-				string(idx.nameArena[de.nameOff : de.nameOff+uint32(de.nameLen)]) == name {
+				string(idx.nameArena[de.nameOff:de.nameOff+uint32(de.nameLen)]) == name {
 				return idx.toVFSInode(idx.inodes[de.childIdx]), nil
 			}
 		}
@@ -317,7 +317,7 @@ func (idx *Index) verifyCleanPath(entryIdx uint32, clean string) bool {
 		}
 		seg := clean[slash+1 : pos]
 		de := idx.dirEntries[cur]
-		if int(de.nameLen) != len(seg) || string(idx.nameArena[de.nameOff : de.nameOff+uint32(de.nameLen)]) != seg {
+		if int(de.nameLen) != len(seg) || string(idx.nameArena[de.nameOff:de.nameOff+uint32(de.nameLen)]) != seg {
 			return false
 		}
 		pos = slash

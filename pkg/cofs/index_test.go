@@ -75,7 +75,7 @@ func TestIndexExactnessZeroFalsePositivesAndLayeredWhiteouts(t *testing.T) {
 	if err := vfs.Create(ctx, vfs.Config{Backend: be, Cipher: ciph}); err != nil {
 		t.Fatal(err)
 	}
-	v, err := vfs.Attach(ctx, vfs.Config{Backend: be, Cipher: ciph, Round: 1})
+	v, err := vfs.Attach(ctx, vfs.Config{Backend: be, Cipher: ciph, Round: 1, Journal: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -161,7 +161,7 @@ func TestIndexExactnessZeroFalsePositivesAndLayeredWhiteouts(t *testing.T) {
 	// Concurrent race detector check across 16 readers + LayeredResolver whiteouts.
 	wsStore := storetest.NewMem()
 	_ = vfs.Create(ctx, vfs.Config{Backend: wsStore, Cipher: ciph})
-	ws, err := vfs.Attach(ctx, vfs.Config{Backend: wsStore, Cipher: ciph, Round: 1})
+	ws, err := vfs.Attach(ctx, vfs.Config{Backend: wsStore, Cipher: ciph, Round: 1, Journal: t.TempDir()})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +201,7 @@ func BenchmarkCoFSResolveDepth6(b *testing.B) {
 	k, _ := age.GenerateHybridIdentity()
 	ciph := vfs.Hybrid(k)
 	_ = vfs.Create(ctx, vfs.Config{Backend: be, Cipher: ciph})
-	v, _ := vfs.Attach(ctx, vfs.Config{Backend: be, Cipher: ciph, Round: 1})
+	v, _ := vfs.Attach(ctx, vfs.Config{Backend: be, Cipher: ciph, Round: 1, Journal: b.TempDir()})
 	defer v.Close()
 
 	d1, _ := v.Mkdir(ctx, vfs.RootInode, "usr", 0o755)

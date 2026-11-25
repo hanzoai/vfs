@@ -156,7 +156,7 @@ func RunSuite(ctx context.Context, scratchRoot string, fullScale bool) (SuiteRep
 	if err := vfs.Create(ctx, vfs.Config{Backend: probe, Cipher: ciph}); err != nil {
 		return SuiteReport{}, err
 	}
-	writer, err := vfs.Attach(ctx, vfs.Config{Backend: probe, Cipher: ciph, Round: 1})
+	writer, err := vfs.Attach(ctx, vfs.Config{Backend: probe, Cipher: ciph, Round: 1, Journal: filepath.Join(scratchRoot, "writer-journal")})
 	if err != nil {
 		return SuiteReport{}, err
 	}
@@ -363,7 +363,7 @@ func RunSuite(ctx context.Context, scratchRoot string, fullScale bool) (SuiteRep
 	if err := vfs.Create(ctx, vfs.Config{Backend: wsBE, Cipher: ciph}); err != nil {
 		return SuiteReport{}, err
 	}
-	wsVol, err := vfs.Attach(ctx, vfs.Config{Backend: wsBE, Cipher: ciph, Round: 1})
+	wsVol, err := vfs.Attach(ctx, vfs.Config{Backend: wsBE, Cipher: ciph, Round: 1, Journal: filepath.Join(scratchRoot, "ws-journal")})
 	if err != nil {
 		return SuiteReport{}, err
 	}
