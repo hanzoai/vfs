@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"io/fs"
 	"math/rand/v2"
 	"strings"
 	"testing"
@@ -39,8 +40,10 @@ func content(seed uint64, n int) []byte {
 	return b
 }
 
+// cfg is the configuration of a Volume of a test: a journal of 16 MiB (segments of 1 MiB, which a
+// test pays to make) in the directory the tests share, on files that are not synced to the disk.
 func cfg(be backend.Backend, c vfs.Cipher, round uint64) vfs.Config {
-	return vfs.Config{Backend: be, Cipher: c, Round: round}
+	return vfs.Config{Backend: be, Cipher: c, Round: round, Journal: storetest.Journals(), JournalCapacity: 64 << 20, Disk: storetest.Disk}
 }
 
 // newMem creates a Volume on an in-memory store and returns the store, the
@@ -56,6 +59,7 @@ func newMem(t testing.TB) (*storetest.Mem, vfs.Cipher, *vfs.Volume) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Cleanup(func() { v.Close() })
 	return be, c, v
 }
 
@@ -139,7 +143,9 @@ func packBytes(be *storetest.Mem) int {
 	return n
 }
 
-// snapshot maps every path of the Volume to "dir" or the blake3 of its bytes.
+// snapshot maps every path of the Volume to what is there: for a directory its mode and link
+// count; for a file its inode number, mode, owner, link count and the blake3 of its bytes;
+// for a symbolic link its target instead of the bytes.
 func snapshot(t testing.TB, v *vfs.Volume) map[string]string {
 	t.Helper()
 	out := map[string]string{}
@@ -151,13 +157,27 @@ func snapshot(t testing.TB, v *vfs.Volume) map[string]string {
 		}
 		for _, e := range ents {
 			p := prefix + "/" + e.Name
-			if e.Mode.IsDir() {
-				out[p] = "dir"
-				walk(e.ID, p)
-				continue
+			in, err := v.Stat(ctx, e.ID)
+			if err != nil {
+				t.Fatalf("stat %s: %v", p, err)
 			}
-			sum := blake3.Sum256(readAll(t, v, e.ID))
-			out[p] = hex.EncodeToString(sum[:8])
+			attrs := fmt.Sprintf("i%d %v n%d %d:%d", in.ID, in.Mode, in.Nlink, in.UID, in.GID)
+			switch {
+			case e.Mode.IsDir():
+				out[p] = "dir " + attrs
+				walk(e.ID, p)
+			case e.Mode&fs.ModeSymlink != 0:
+				target, err := v.Readlink(ctx, e.ID)
+				if err != nil {
+					t.Fatalf("readlink %s: %v", p, err)
+				}
+				out[p] = "-> " + target + " " + attrs
+			case e.Mode&fs.ModeType != 0:
+				out[p] = "special " + attrs
+			default:
+				sum := blake3.Sum256(readAll(t, v, e.ID))
+				out[p] = hex.EncodeToString(sum[:8]) + " " + attrs
+			}
 		}
 	}
 	walk(vfs.RootInode, "")
@@ -209,6 +229,31 @@ func stateOne(t testing.TB, v *vfs.Volume) {
 	data := mkdir(t, v, vfs.RootInode, "data")
 	write(t, v, data, "big", content(1000, 5<<20))
 	write(t, v, data, "keep", content(1001, 30_000))
+
+	// what the POSIX operations add: hard links, symbolic links, a pipe, owners and modes,
+	// directories inside directories
+	links := mkdir(t, v, vfs.RootInode, "links")
+	orig := write(t, v, links, "orig", content(7000, 20_000))
+	for dir, name := range map[vfs.InodeID]string{links: "hard", src: "also"} {
+		if _, err := v.Link(ctx, orig.ID, dir, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := v.Symlink(ctx, links, "sym", "orig"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Symlink(ctx, links, "dangling", "../nowhere"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := v.Mknod(ctx, links, "pipe", fs.ModeNamedPipe|0o600); err != nil {
+		t.Fatal(err)
+	}
+	mode, uid, gid := fs.FileMode(0o750)|fs.ModeSetuid, uint32(1000), uint32(100)
+	if _, err := v.SetAttr(ctx, orig.ID, vfs.Change{Mode: &mode, UID: &uid, GID: &gid}); err != nil {
+		t.Fatal(err)
+	}
+	deeper := mkdir(t, v, mkdir(t, v, links, "deep"), "deeper")
+	write(t, v, deeper, "leaf", content(7001, 100))
 }
 
 // stateTwo changes it: edits the big file, grows keep, adds a directory, removes a file.
@@ -237,6 +282,36 @@ func stateTwo(t testing.TB, v *vfs.Volume) {
 	if err := v.Remove(ctx, src.ID, "f03"); err != nil {
 		t.Fatal(err)
 	}
+	// Moves, replacements and links that change names and counts: a directory of 150 entries
+	// goes under another and one with children comes up; a file replaces a link; two files
+	// trade names; a name is added and one is taken away.
+	links, _ := v.Resolve(ctx, "/links")
+	data, _ = v.Resolve(ctx, "/data")
+	rename := func(od vfs.InodeID, on string, nd vfs.InodeID, nn string, fl vfs.RenameFlags) {
+		if err := v.Rename(ctx, od, on, nd, nn, fl); err != nil {
+			t.Fatalf("rename %s: %v", on, err)
+		}
+	}
+	d4, _ := v.Resolve(ctx, "/d4")
+	rename(vfs.RootInode, "d4", links.ID, "d4", 0)
+	rename(links.ID, "deep", vfs.RootInode, "deep", 0)
+	rename(links.ID, "sym", links.ID, "dangling", 0)
+	keep, _ = v.Lookup(ctx, data.ID, "keep")
+	if _, err := v.Link(ctx, keep.ID, links.ID, "keep"); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Remove(ctx, src.ID, "also"); err != nil {
+		t.Fatal(err)
+	}
+	d5, _ := v.Resolve(ctx, "/d5")
+	rename(vfs.RootInode, "d5", links.ID, "d5", 0)
+	rename(d5.ID, "f001", d5.ID, "f002", vfs.RenameExchange)
+	rename(links.ID, "hard", d4.ID, "hard", 0)
+	mode := fs.FileMode(0o600)
+	if _, err := v.SetAttr(ctx, keep.ID, vfs.Change{Mode: &mode}); err != nil {
+		t.Fatal(err)
+	}
+
 	// A change in the middle of the many-file directories.
 	d3, _ := v.Resolve(ctx, "/d3")
 	for _, i := range []int{7, 70, 140} {

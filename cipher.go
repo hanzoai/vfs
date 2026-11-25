@@ -8,10 +8,10 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"github.com/hanzoai/vfs/internal/blake3"
 	"io"
 
 	"github.com/luxfi/age"
-	"github.com/zeebo/blake3"
 )
 
 // Cipher seals and opens every object a Volume writes: chunks, metadata shards
@@ -184,7 +184,7 @@ func tagKey(k *age.HybridIdentity) (key [32]byte) {
 
 // tag is the keyed digest of what is sealed.
 func tag(key [32]byte, plain []byte) []byte {
-	h, _ := blake3.NewKeyed(key[:])
+	h := blake3.Keyed(&key)
 	_, _ = h.Write(plain)
 	return h.Sum(nil)
 }
@@ -205,7 +205,7 @@ func Hybrid(current *age.HybridIdentity, retired ...*age.HybridIdentity) Cipher 
 // ageKeyID is the first 8 bytes of blake3 over the public recipient string: it
 // names a key without revealing anything secret.
 func ageKeyID(k *age.HybridIdentity) string {
-	sum := blake3.Sum256([]byte(k.Recipient().String()))
+	sum := blake3.Sum([]byte(k.Recipient().String()))
 	return hex.EncodeToString(sum[:8])
 }
 

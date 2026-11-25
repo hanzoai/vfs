@@ -74,8 +74,9 @@ func TestLostAckThenTakeoverIsNotReportedLost(t *testing.T) {
 	}
 	write(t, a, vfs.RootInode, "acked-by-nobody", []byte("landed"))
 	lose.Store(true)
-	if err := a.Flush(ctx); err == nil {
-		t.Fatal("expected the lost reply")
+	// The publisher reads the Head, finds its own generation in it, and says so.
+	if err := a.Flush(ctx); err != nil {
+		t.Fatalf("Flush of a commit that landed and lost its reply = %v", err)
 	}
 	lose.Store(false)
 	b, err := vfs.Attach(ctx, cfg(mem, c, 2))
@@ -89,18 +90,22 @@ func TestLostAckThenTakeoverIsNotReportedLost(t *testing.T) {
 	if err := a.Flush(ctx); err != nil {
 		t.Fatalf("Flush = %v: the writer is not told its changes landed, but the successor carries them", err)
 	}
-	// It is fenced all the same.
-	if _, err := a.Create(ctx, vfs.RootInode, "more", 0o644); !errors.Is(err, vfs.ErrStaleRound) {
-		t.Fatalf("a fenced writer accepted a change: %v", err)
+	// It is fenced all the same. Nothing polls, so it learns at its next publication, and
+	// what it accepts until then is in its own journal and goes nowhere.
+	if _, err := a.Create(ctx, vfs.RootInode, "more", 0o644); err != nil {
+		t.Fatalf("a writer that has not yet been told it is fenced refused a change: %v", err)
 	}
-	// And when the successor has committed since, ErrStaleRound is what it hears.
+	if err := a.Flush(ctx); !errors.Is(err, vfs.ErrStaleRound) {
+		t.Fatalf("the fenced writer's next publication = %v, want ErrStaleRound", err)
+	}
+	if _, err := a.Create(ctx, vfs.RootInode, "again", 0o644); !errors.Is(err, vfs.ErrStaleRound) {
+		t.Fatalf("a fenced writer that was told accepted a change: %v", err)
+	}
 	write(t, b, vfs.RootInode, "later", []byte("b"))
 	flush(t, b)
-	c2, err := vfs.Attach(ctx, cfg(mem, c, 3))
-	if err != nil {
-		t.Fatal(err)
+	if _, err := b.Resolve(ctx, "/more"); err == nil {
+		t.Fatal("a change of the fenced writer is in the successor's tree")
 	}
-	_ = c2
 }
 
 // TestDeposedWriterIsToldAtItsNextCommit: after a takeover the old writer learns it
@@ -108,7 +113,8 @@ func TestLostAckThenTakeoverIsNotReportedLost(t *testing.T) {
 // keeps chunking, sealing and uploading packs that no Head will ever name. This
 // measures that and holds the line that matters: the orphans change nothing in the
 // committed tree, and the commit refuses. Reclaiming them is a collector's job, which
-// is not built yet.
+// is not built yet. The writer is told by its next publication, whichever asks for it: the
+// Volume's own (the bound, or the journal filling) or a Flush.
 func TestDeposedWriterIsToldAtItsNextCommit(t *testing.T) {
 	mem := storetest.NewMem()
 	c := vfsAge(t)
@@ -135,6 +141,10 @@ func TestDeposedWriterIsToldAtItsNextCommit(t *testing.T) {
 	for i := 0; i < sized(24, 96); i++ { // 96 MiB
 		chunk := content(uint64(1000+i), 1<<20)
 		if _, err := f.WriteAt(ctx, chunk, wrote); err != nil {
+			// Its own publication, which the journal's fill or the bound starts, told it.
+			if errors.Is(err, vfs.ErrStaleRound) {
+				break
+			}
 			t.Fatal(err)
 		}
 		wrote += int64(len(chunk))
@@ -317,9 +327,10 @@ func TestHostileBackend(t *testing.T) {
 	})
 }
 
-// TestLostAckNoLostUpdateNoDuplicate: the Head write lands, its reply is lost;
-// the writer then makes MORE changes and flushes again. The tree must hold exactly
-// the first batch and the second, each once.
+// TestLostAckNoLostUpdateNoDuplicate: the Head write lands, its reply is lost, and the
+// publisher recognises it; the writer then makes MORE changes and flushes again, and that
+// Head's reply is lost too. The tree must hold exactly the first batch and the second,
+// each once.
 func TestLostAckNoLostUpdateNoDuplicate(t *testing.T) {
 	mem := storetest.NewMem()
 	var lose atomic.Int32
@@ -335,11 +346,9 @@ func TestLostAckNoLostUpdateNoDuplicate(t *testing.T) {
 	}
 	v, _ := vfs.Attach(ctx, cfg(hook, c, 1))
 	write(t, v, vfs.RootInode, "a", []byte("first"))
-	lose.Store(2) // two commits in a row land and lose their replies
-	for range 2 {
-		if err := v.Flush(ctx); err == nil {
-			t.Fatal("expected a lost reply")
-		}
+	lose.Store(2) // the next two commits land and lose their replies
+	if err := v.Flush(ctx); err != nil {
+		t.Fatalf("Flush of a commit that landed and lost its reply = %v", err)
 	}
 	write(t, v, vfs.RootInode, "b", []byte("second"))
 	big := write(t, v, vfs.RootInode, "big", content(5, 3<<20)).ID

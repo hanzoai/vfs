@@ -53,7 +53,7 @@ edits, exactly what a cut of the file's final bytes gives
 ordered Merkle search tree (a prolly tree) of immutable shards:
 
 ```
-[1][ino]                 inode: tagged fields (mode, size, times; room for more)
+[1][ino]                 inode: tagged fields (mode, size, times; owner, group, link count, parent)
 [2][dir ino][name]       directory entry: child ino, type
 [3][ino]                 inline file bytes
 [3][ino][offset]         chunk reference: chunk id, length
@@ -62,8 +62,14 @@ ordered Merkle search tree (a prolly tree) of immutable shards:
 
 The inode record is a sequence of `[tag][length][value]` fields in ascending tag
 order. A reader checks the tags it knows, carries the ones it does not, and writes
-them back on rewrite, so owner, link count, device, symlink target and the like are
-new tags. New record kinds take the next `[table]` byte.
+them back on rewrite. Tags 1 to 5 are always there; 6 and 7 (owner and group, both or
+neither), 8 (link count of a non-directory, at least 2: the `links` bit of the Head announces
+it) and 9 (the parent of a directory) are there when they differ from what absence says. A
+symbolic link's target is its inline data record. A directory's link count is derived (2 and
+its subdirectories), cached in memory, never stored. New record kinds take the next `[table]` byte.
+The Head's Tail carries `links` (tag 2, under bit 2: the number of inodes with more than one
+name; set by the first hard link, never cleared) and `usage` (tag 64, no bit: inodes and bytes
+stored, kept by every commit; statfs reads it).
 
 Node boundaries are decided by the entries (a keyed hash of the key under a
 threshold proportional to the entry's size, the key derived from the Volume's seed),
@@ -83,21 +89,42 @@ place: a Volume copied to another place does not open there until `vfs.Reseal`
 rewrites its Head for it. The place string is canonical: absolute and symlink-free
 for a directory, `s3://bucket/prefix` without slashes at the ends for a bucket.
 
-## Commit, Flush, Fsync
+## Journal, generations, Flush, Fsync
 
-`Flush` settles every written file into chunks, uploads the open pack, writes the
-shards the changes touched, then replaces `head` with **one conditional PUT**
-(`If-Match` on the version read; `If-None-Match: *` for the first). Until that
-write lands `head` names the previous tree, which nothing touched: a crash at any
-point leaves the Volume as the last Flush left it. Uploaded chunks, packs and
-shards of a failed Flush are unreferenced garbage, never corruption.
+A written Volume has a **journal** on the node's disk (`journal/`, `docs/journal.md`; `Config.Journal`
+is required to `Attach`, bounded by `Config.JournalCapacity`). Every change (`change.go`: a write,
+a size, a punch, or a set of tree records with the files it forgets, so rename, link and attribute
+changes are the tree kind) is built from memory, sealed (`ledger.go`: one AES-256-GCM key
+per journal, itself sealed by the Cipher, kept beside the journal, using NIST SP 800-38D §8.2.1
+4-byte random salt + 8-byte monotonic counter nonces), appended, and applied, in that
+order under `wmu`, by `Volume.mutate` (and atomic multi-piece `Volume.mutateWrite`); the same `apply` runs a replay. `mu` guards the state and
+is held for moments: a read of a shard the cache lacks fails with `*missing` under a `local`
+context, the lock is let go, the shard is fetched, the call is repeated (`view`, `edit`,
+`mutate`). Nothing waits for the store or the journal's disk while holding `mu`.
 
-The package documentation (`doc.go`) holds the **durability table**: what is
-durable when each call returns, and what a later journal must keep. In short: only
-`Flush` is durable; `Fsync` and the FUSE close are `Flush`; `Close` is not; `Attach`
-loses no acknowledged commit. Objects are written once under hash or random names,
-so repeating a write, or one that completes after its caller gave up, is harmless;
-the Head compare-and-swap is the only mutation of the tree.
+A file's content is read through three levels: settled (inline or chunks), the frozen layer (the
+writes of the generation being published), the live layer (`file.go`: `body.plan` fills what the
+levels hold under the lock and leaves the chunk fetches for after it).
+
+The publisher (`generation.go`) cuts a **generation** under the lock (the overlay and each dirty
+file's live layer become immutable), then outside it settles files in parallel (cut, hash, seal on
+`Config.Workers`, packs to `Config.Streams` uploads), builds the tree's shards (uploaded in
+parallel), makes the journal durable to the cut's sequence, commits the Head (one conditional PUT
+on the version its last write left, `pkg/fence`) carrying that sequence, and only then tells the
+journal (`Publish`, `Reclaim`). It runs when `journal.Due` says the oldest change is `Bound/2` old,
+when memory, the overlay or the journal hold enough (`pressure`), and on `Flush`. A failed
+generation is made again whole (what completed is kept); an unknown Head write is read back and
+recognised by its tree and sequence. A change that finds the journal full waits for a publication
+that is progressing (`draining`) and is refused with `ErrFull` otherwise.
+
+* `fsync` (`File.Sync`, `Volume.SyncInode`) waits for the journal and for nothing else. `close`
+  and the FUSE flush ask the store for nothing. `Flush` is the store: it returns after a Head
+  carrying every change made before it. `Close` is the journal (no publication); the next `Attach`
+  on the node replays what is left (`Recovery`), or reports it may be lost.
+* The durability table is `doc.go`; the normative text is `docs/SPECIFICATION.md` section 8.
+* `Volume.State` is what an agent reads: degraded, age of the oldest unpublished change, backlog.
+
+Older notes that still hold:
 
 * On the mount no request is answered EINTR: an interrupt (a signal reaching a caller
   that waits) does not end the wait, and every call returns its own result. C callers
@@ -127,14 +154,14 @@ the Head compare-and-swap is the only mutation of the tree.
   specification text, and by `pin_test.go` (key shapes, sizes, a fixture of the default
   Cipher). Change a byte and one fails; change the text and the test together.
 * The Head ends in `Journal` (the journal sequence it includes, 0 for none), `Needs`
-  (feature bits, 0 for none; none is defined) and the Tail: fields `[tag][length][value]`
+  (feature bits: 0, or bit 2 `links` once a hard link exists) and the Tail: fields `[tag][length][value]`
   with strictly increasing tags. A build refuses a Head with a bit it does not know
   (`ErrNeeds`), refuses one whose Tail is not whole, in order and at most 256 fields or that
   lacks the field of a bit it sets (`ErrCorrupt`), skips the fields it does not know and
   carries every one unchanged. `snapshots`, `links` and `base` are the reserved tags and bits
-  1 to 3 (SPECIFICATION 5.1), with no encoding: a bit is unusable until its encoding is in the
-  text, and no build sets one. A change that must be honoured by every writer or every
-  collector sets its bit and writes its field.
+  1 to 3 (SPECIFICATION 5.1); `links` (2) is defined and the others have no encoding: a bit is
+  unusable until its encoding is in the text, and no build sets one of those. A change that must
+  be honoured by every writer or every collector sets its bit and writes its field.
 * Integers are in their shortest form and a value wider than its field is refused, not
   truncated (SPECIFICATION 1): `reader.uvarint`, `uvarint32`, `varint`.
 * Objects beside the tree (a trace store, say) are extension objects (SPECIFICATION 3.1):
@@ -154,17 +181,16 @@ the Head compare-and-swap is the only mutation of the tree.
   255, separated by `/`; every backend keeps those as written (a backend may keep more: the
   replica package's `orgs/acme/kv.db`), and `storetest.Strict` refuses any other from the
   Volume. `List` returns objects with size and modification time, by string prefix.
-* On error the changes stay in memory for the next Flush and the outcome of that
-  attempt is unknown. `ErrStaleRound` means this Volume was fenced; if the store's
+* On error the changes stay in memory and in the journal for the next publication and the
+  outcome of that attempt is unknown. `ErrStaleRound` means this Volume was fenced; if the store's
   Head is exactly its tree, Flush says nil (the commit landed, the reply was lost).
 * `Head.Seq` numbers commit attempts and never repeats; it can skip.
 * A store that returns an older Head cannot be told from the current one by this
   library; a caller that must notice keeps the Seq it last saw.
 * Nothing polls. A deadline timer belongs to the caller.
-* Flush holds the Volume exclusively for its duration, including its store calls.
-* Memory is bounded without a commit: past `Config.Dirty` bytes written (each
-  separate write is charged a fixed overhead too) the files are chunked and
-  uploaded; past `Config.Overlay` pending records they are written into shards.
+* Memory is bounded: past `Config.Dirty` bytes of unpublished writes (each separate write is
+  charged a fixed overhead too) or `Config.Overlay` unpublished records a change waits for a
+  publication, and is refused with `ErrFull` if publication is failing.
 
 ## Fence
 
@@ -207,17 +233,30 @@ f, _ := v.Open(ctx, ino)             // *File: ReadAt, WriteAt, Truncate, Stat, 
 v.Truncate(ctx, ino, size); v.Flush(ctx); v.Stats(); v.Close()
 ```
 
-The API is by inode and name, as FUSE is, so rename, symlink, link, attributes and
-xattr add methods and record kinds without reshaping anything. Removing a file
-while it is open makes its handles fail (no orphan inodes yet).
+The API is by inode and name, as FUSE is. The namespace operations are `Rename(oldDir,
+oldName, newDir, newName, flags)` (atomic; no-replace and exchange), `Link`, `Symlink`,
+`Readlink`, `Mknod` (pipe, socket or regular), `SetAttr` (mode, owner and group, times, size),
+`File.Punch`, `Parent`, `Usage` and `Check` (the namespace's invariants: names, link counts,
+parents and the Head's counters). A creation takes `vfs.Owner(uid, gid)`; without it the inode has
+no owner record and belongs to whoever runs the mount. `Config.Clock` is the time of every
+change; `Config.Capacity` bounds the bytes (`ErrNoSpace`). An operation reads before it stages,
+so an error changes nothing. A file removed while a handle holds it stays whole for the handle
+(an orphan, in memory, never in a Head); the last close ends it.
 
 ## Layout
 
 ```
 vfs/
 ├── doc.go                   # layout, commit, durability table, crash matrix, fence
-├── volume.go head.go        # Create/Open/Attach/Flush; Head and sealing contexts
-├── ops.go file.go           # namespace operations; File, settle, recut, holes
+├── volume.go head.go        # Create/Open/Attach/Flush/State; mutate, apply, replay; Head and sealing contexts
+├── change.go ledger.go      # a change as the journal records it; the journal's key and sealing
+├── generation.go            # cut, settle, publish, the publisher goroutine
+├── pipe.go                  # bounded uploads, bounded CPU workers, shared fetches
+├── ops.go file.go           # names, links, symbolic links, removal; File, layers, body.plan, holes, orphans
+├── rename.go attr.go        # Rename and its flags; SetAttr
+├── namespace.go usage.go    # the Head's links and usage fields; directory link counts; Usage
+├── check.go                 # Check: the namespace's invariants
+├── journal/                 # the node's local log (docs/journal.md)
 ├── chunk.go pack.go         # FastCDC; packs, putChunk/getChunk
 ├── record.go tree.go shard.go overlay.go codec.go lru.go   # metadata tree
 ├── cipher.go                # Cipher, Provider, Hybrid, the configuration check
@@ -259,6 +298,8 @@ go test ./...                                    # fast + scale tests
 go test -short -race ./...                       # the race detector over the lot (CI runs it on the tests with goroutines)
 go test -tags fuse ./pkg/mount                   # needs /dev/fuse + fusermount3
 tools/ci/mount.sh ./pkg/mount run '^TestFUSEPOSIX$'   # the same with no helper and no privilege, in a user namespace
+tools/ci/gitwork.sh DIR ORIGIN                   # git's work on DIR: the same hashes on a mount and on tmpfs
+tools/ci/treehash.sh DIR FACTS                   # every fact about a tree, and one hash (an npm ci on both)
 PATH=$DIR:$PATH go test ./...                    # $DIR holds the `s3` server (tools/ci/s3server.sh DIR fetches the published image)
 go run ./tools/mutate                            # every mutation must be killed by a test
 ```
@@ -285,19 +326,20 @@ answer, and without root the threads stay in D state until reboot.
 
 ## Not yet built (plain statement of fact)
 
-* POSIX operations beyond Lookup, ReadDir, Mkdir, Create, Remove, Truncate, Read,
-  Write, Flush, Fsync: rename, symlink, hard link, chmod/chown/utimens, statfs,
-  xattr, locks, unlink-while-open. The mount answers the missing ones ENOSYS.
-* The node cache and journal (Fsync costs a commit), group commit, parallel
-  uploads, read-ahead, partial-chunk reads.
+* Extended attributes, device nodes, `O_TMPFILE`, the flags of `renameat2` on a mount
+  (the FUSE library has no request for them: SPECIFICATION 11.2), and the sticky bit in
+  `stat` (the library leaves it out of its answer).
+* Bulk payloads bypass the ordered log (a second journal for writes over about 64 KiB): fsync
+  waits behind bulk writers in the one log. A local disk of the SATA class should not carry the
+  journal until it is. Unpublished data is also held in memory, so a burst larger than
+  `Config.Dirty` runs at the speed of the store.
+* A local chunk cache on disk, read-ahead, partial-chunk reads.
 * A server and agent process around the Volume.
 * Garbage collection of chunks, packs and shards no Head names (a deposed writer
-  can upload packs until its next commit), Snapshot, Clone, Usage, import, export.
+  can upload packs until its next commit), Snapshot, Clone, import, export.
 * Retries with backoff, deadlines on store calls, a circuit breaker, metrics,
-  handling of a store's slow-down answers. The Volume lock is held across the store
-  calls of a commit.
+  handling of a store's slow-down answers.
 * Paged directory listing: ReadDir returns a whole directory.
-* Re-sealing a Volume's Head for a new place.
 * Compression.
 
 ## Rules

@@ -2,8 +2,7 @@ package vfs
 
 import (
 	"encoding/binary"
-
-	"github.com/zeebo/blake3"
+	"github.com/hanzoai/vfs/internal/blake3"
 )
 
 // Chunk sizes. A file's bytes are cut into content-defined chunks between
@@ -47,7 +46,7 @@ func newGear(seed [32]byte) *gear {
 	_, _ = h.WriteString("hanzoai/vfs chunker gear table")
 	_, _ = h.Write(seed[:])
 	var raw [256 * 8]byte
-	_, _ = h.Digest().Read(raw[:])
+	h.Expand(raw[:])
 	var g gear
 	for i := range g {
 		g[i] = binary.LittleEndian.Uint64(raw[i*8:])
@@ -87,4 +86,4 @@ func cut(g *gear, b []byte) int {
 // ids mean equal bytes, which is what dedupe uses. Volumes do not share chunks.
 type chunkID [32]byte
 
-func sumChunk(p []byte) chunkID { return blake3.Sum256(p) }
+func sumChunk(p []byte) chunkID { return blake3.Sum(p) }
