@@ -5,8 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
-
-	"github.com/zeebo/blake3"
+	"github.com/hanzoai/vfs/internal/blake3"
 )
 
 // headKey is the one mutable object of a Volume. Everything else is written
@@ -41,7 +40,7 @@ type Head struct {
 	// Needs is a set of feature bits a reader must know to read the Volume at all. A
 	// build refuses a Head with a bit it does not know (ErrNeeds), so a change that
 	// every writer must honour, or every collector, is announced by a bit and never
-	// reaches a build that would break it. No bit is defined yet.
+	// reaches a build that would break it. Bit 2 (links) is the one defined.
 	Needs uint64
 
 	// Tail is what follows Needs: fields that later builds append, each [tag][length]
@@ -55,8 +54,8 @@ type Head struct {
 var ErrNeeds = errors.New("vfs: the Volume needs a feature this build does not have")
 
 // knownNeeds is the set of Needs bits this build understands. Bit N announces the field
-// of the Tail with tag N; no bit is defined.
-const knownNeeds uint64 = 0
+// of the Tail with tag N; links is the one defined.
+const knownNeeds uint64 = needsLinks
 
 // maxTailFields bounds the number of fields of a Tail.
 const maxTailFields = 256

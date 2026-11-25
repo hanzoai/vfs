@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"path"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"text/tabwriter"
@@ -75,6 +76,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) 
 		backendURL string
 		round      uint64
 		cache      int64
+		journal    string
+		capacity   int64
 	)
 	root := &cobra.Command{
 		Use:           "vfs",
@@ -87,6 +90,8 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) 
 	root.SetOut(stdout)
 	root.PersistentFlags().StringVar(&backendURL, "backend", "", "where the Volume lives: file:///dir or s3://bucket/prefix?endpoint=host:port")
 	root.PersistentFlags().Int64Var(&cache, "cache-bytes", 256<<20, "memory for decoded shards and chunks")
+	root.PersistentFlags().StringVar(&journal, "journal", "", "a directory on this node's disk for the journal of a Volume that is written (default: the user cache directory); it must not be on memory")
+	root.PersistentFlags().Int64Var(&capacity, "journal-bytes", 4<<30, "the most disk the journal uses; a write is refused when the store has not taken that much")
 
 	config := func(rnd uint64) (vfs.Config, error) {
 		if backendURL == "" {
@@ -100,7 +105,15 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) 
 		if err != nil {
 			return vfs.Config{}, err
 		}
-		return vfs.Config{Backend: be, Cipher: c, Round: rnd, Cache: cache}, nil
+		cfg := vfs.Config{Backend: be, Cipher: c, Round: rnd, Cache: cache, Journal: journal, JournalCapacity: capacity}
+		if rnd != 0 && cfg.Journal == "" {
+			dir, err := os.UserCacheDir()
+			if err != nil {
+				return vfs.Config{}, fmt.Errorf("--journal is required: %w", err)
+			}
+			cfg.Journal = filepath.Join(dir, "vfs", "journal")
+		}
+		return cfg, nil
 	}
 	// Writing commands attach at --round; reading commands only open.
 	attach := func() (*vfs.Volume, error) {
@@ -111,7 +124,17 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) 
 		if err != nil {
 			return nil, err
 		}
-		return vfs.Attach(ctx, cfg)
+		v, err := vfs.Attach(ctx, cfg)
+		if err != nil {
+			return nil, err
+		}
+		if rec := v.Recovery(); rec.Lost || rec.Replayed > 0 {
+			fmt.Fprintf(os.Stderr, "vfs: recovered %d changes from this node's journal; changes of the previous owner may be missing: %t %s\n", rec.Replayed, rec.Lost, rec.Why)
+			for _, w := range rec.Report.Warnings {
+				fmt.Fprintf(os.Stderr, "vfs: journal: %s\n", w)
+			}
+		}
+		return v, nil
 	}
 	open := func() (*vfs.Volume, error) {
 		cfg, err := config(0)

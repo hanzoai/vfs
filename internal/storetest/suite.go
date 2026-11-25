@@ -21,6 +21,52 @@ import (
 func Run(t *testing.T, open func(t *testing.T) backend.Backend) {
 	ctx := context.Background()
 
+	// The caller owns the buffer of a write: once the call returns, the backend does not read
+	// it again, so the caller may reuse it or clear it, however the store sent it (in one
+	// request, in parts, or again after a failure). The writer returns its buffers to a pool
+	// the moment a write returns, so a backend that kept a reference would store another
+	// object's bytes.
+	t.Run("the caller owns its buffer when a write returns", func(t *testing.T) {
+		be := open(t)
+		clobber := func(b []byte) {
+			for i := range b {
+				b[i] = 0xEE
+			}
+		}
+		put := func(name string, write func(key string, data []byte) error) {
+			t.Helper()
+			for _, n := range []int{1, 4 << 10, 1 << 20, 5 << 20} {
+				data := make([]byte, n)
+				for i := range data {
+					data[i] = byte(i*7 + n)
+				}
+				want := append([]byte(nil), data...)
+				key := fmt.Sprintf("own/%s/%d", name, n)
+				if err := write(key, data); err != nil {
+					t.Fatalf("%s %d bytes: %v", name, n, err)
+				}
+				clobber(data)
+				got, _, err := be.Get(ctx, key, backend.Unbounded)
+				if err != nil || !bytes.Equal(got, want) {
+					t.Fatalf("%s of %d bytes: after the call returned and the caller cleared its buffer the store holds %d bytes that differ (err %v)", name, n, len(got), err)
+				}
+			}
+		}
+		put("put", func(key string, data []byte) error { return be.Put(ctx, key, data) })
+		put("putabsent", func(key string, data []byte) error { _, err := be.PutIfAbsent(ctx, key, data); return err })
+		put("putversion", func(key string, data []byte) error {
+			if err := be.Put(ctx, key, []byte("first")); err != nil {
+				return err
+			}
+			_, v, err := be.Get(ctx, key, backend.Unbounded)
+			if err != nil {
+				return err
+			}
+			_, err = be.PutIfVersion(ctx, key, data, v)
+			return err
+		})
+	})
+
 	t.Run("get put range delete", func(t *testing.T) {
 		be := open(t)
 		if _, _, err := be.Get(ctx, "a/b", backend.Unbounded); !errors.Is(err, backend.ErrNotFound) {

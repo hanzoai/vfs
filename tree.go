@@ -4,10 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"github.com/hanzoai/vfs/internal/blake3"
 	"sort"
 	"sync"
-
-	"github.com/zeebo/blake3"
 )
 
 // The metadata tree is a Merkle search tree whose shape is a pure function of
@@ -61,8 +60,7 @@ func boundaryKey(seed [32]byte) (key [32]byte) {
 func newTree(sh *shards, seed [32]byte) *tree {
 	t := &tree{sh: sh, target: nodeTarget, max: nodeMax, key: boundaryKey(seed)}
 	t.hashes.New = func() any {
-		h, _ := blake3.NewKeyed(t.key[:])
-		return h
+		return blake3.Keyed(&t.key)
 	}
 	return t
 }
