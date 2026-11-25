@@ -94,7 +94,7 @@ func Child(t *testing.T) {
 		t.Fatal(err)
 	}
 	be := storetest.Strict{Backend: opened}
-	cfg := vfs.Config{Backend: be, Cipher: vfs.Hybrid(key), Round: round, Journal: journals, Capacity: 64 << 20}
+	cfg := vfs.Config{Backend: be, Cipher: vfs.Hybrid(key), Round: round, Journal: journals, JournalCapacity: 64 << 20}
 	if round == 1 {
 		if err := vfs.Create(context.Background(), cfg); err != nil {
 			t.Fatal(err)

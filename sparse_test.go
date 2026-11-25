@@ -57,7 +57,7 @@ func TestSmallWritesAmplifyMemory(t *testing.T) {
 	}
 	// Nothing is published while the writes are made: the bound is an hour and the journal and memory
 	// are large, so that the heap is the spans' and what a publication would cache is not.
-	_, _, v, _ := pair(t, nil, func(c *vfs.Config) { c.Bound, c.Dirty, c.Capacity = time.Hour, 8<<30, 2<<30 })
+	_, _, v, _ := pair(t, nil, func(c *vfs.Config) { c.Bound, c.Dirty, c.JournalCapacity = time.Hour, 8<<30, 2<<30 })
 	in, err := v.Create(ctx, vfs.RootInode, "sieve", 0o644)
 	if err != nil {
 		t.Fatal(err)

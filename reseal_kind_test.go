@@ -39,7 +39,7 @@ func TestResealWithoutAPlaceRefusesAnotherKindOfObject(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := be.Dump()["head"]
-	if err := Reseal(ctx, Config{Backend: be, Cipher: c, Round: 5, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk}, ""); err == nil {
+	if err := Reseal(ctx, Config{Backend: be, Cipher: c, Round: 5, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk}, ""); err == nil {
 		t.Fatal("a chunk-kind object was adopted as the Head by a key-only Reseal: the Volume now reads as the attacker's empty tree")
 	}
 	if !bytes.Equal(be.Dump()["head"], before) {

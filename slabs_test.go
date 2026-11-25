@@ -2,7 +2,7 @@ package vfs
 
 import (
 	"fmt"
-	"math/bits"
+	mathbits "math/bits"
 	"sync"
 	"unsafe"
 )
@@ -29,7 +29,7 @@ func init() {
 	packSlabs = &poisoner{idle: map[int][][]byte{}, back: map[uintptr]poisonT{}}
 }
 
-func classOf(n int) int { return 1 << bits.Len(uint(max(n, 1)-1)) }
+func classOf(n int) int { return 1 << mathbits.Len(uint(max(n, 1)-1)) }
 
 func (p *poisoner) Get(n int) []byte {
 	if n <= 0 {

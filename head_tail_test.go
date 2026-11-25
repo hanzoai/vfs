@@ -113,7 +113,7 @@ func TestVerifyFindsAnExtentWithoutItsChunk(t *testing.T) {
 	if err := Create(ctx, Config{Backend: be, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	v, err := Attach(ctx, Config{Backend: be, Cipher: c, Round: 1, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk})
+	v, err := Attach(ctx, Config{Backend: be, Cipher: c, Round: 1, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,13 +131,13 @@ func TestVerifyFindsAnExtentWithoutItsChunk(t *testing.T) {
 		t.Fatal(err)
 	}
 	verify := func(round uint64) error {
-		return Reseal(ctx, Config{Backend: be, Cipher: c, Round: round, Journal: storetest.Journals(), Capacity: 64 << 20, Verify: true}, be.String())
+		return Reseal(ctx, Config{Backend: be, Cipher: c, Round: round, Journal: storetest.Journals(), JournalCapacity: 64 << 20, Verify: true}, be.String())
 	}
 	if err := verify(5); err != nil {
 		t.Fatalf("a whole Volume does not pass the full check: %v", err)
 	}
 	// the check wrote the Head at its own round, which fences the writer: the next one is above
-	if v, err = Attach(ctx, Config{Backend: be, Cipher: c, Round: 6, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk}); err != nil {
+	if v, err = Attach(ctx, Config{Backend: be, Cipher: c, Round: 6, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk}); err != nil {
 		t.Fatal(err)
 	}
 	v.mu.Lock()
@@ -158,7 +158,7 @@ func TestVerifyFindsAnExtentWithoutItsChunk(t *testing.T) {
 	if err := verify(7); !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("the full check of a file whose chunk is in no table = %v, want ErrCorrupt", err)
 	}
-	if err := Reseal(ctx, Config{Backend: be, Cipher: c, Round: 8, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk}, be.String()); err != nil {
+	if err := Reseal(ctx, Config{Backend: be, Cipher: c, Round: 8, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk}, be.String()); err != nil {
 		t.Fatalf("the short check reads no chunk table and passes: %v", err)
 	}
 }

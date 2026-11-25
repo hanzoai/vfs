@@ -258,10 +258,13 @@ func TestCheckoutCost(t *testing.T) {
 		if err := vfs.Create(ctx, cfg(mem, c, 0)); err != nil {
 			t.Fatal(err)
 		}
-		v, err := vfs.Attach(ctx, cfg(mem, c, 1))
+		conf := cfg(mem, c, 1)
+		conf.JournalCapacity = 512 << 20 // match production pressure (128 MiB) for a 285 MiB checkout
+		v, err := vfs.Attach(ctx, conf)
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer v.Close()
 		var data int
 		start := time.Now()
 		var dirs []vfs.InodeID

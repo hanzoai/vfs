@@ -18,6 +18,25 @@ import (
 // about a good I/O size: the Volume has no block size.
 const blockSize = 4096
 
+// space is the numbers statfs(2) returns, with no FUSE library in them.
+type space struct {
+	blocks, free, files, ffree uint64
+	namelen                    uint32
+}
+
+// statfs turns a Volume's usage into those numbers: blocks of blockSize, against the
+// capacity or, where there is none, against the largest file a Volume holds.
+func statfs(u vfs.Usage) space {
+	capacity := uint64(vfs.MaxSize)
+	if u.Capacity > 0 {
+		capacity = uint64(u.Capacity)
+	}
+	blocks := capacity / blockSize
+	used := min(blocks, (u.Bytes+u.Pending+blockSize-1)/blockSize)
+	const inodes = 1 << 40
+	return space{blocks: blocks, free: blocks - used, files: inodes, ffree: inodes - min(inodes, u.Files), namelen: 255}
+}
+
 // errno maps a Volume error onto the errno the kernel hands the caller.
 func errno(err error) error {
 	switch {
@@ -33,10 +52,18 @@ func errno(err error) error {
 		return syscall.EISDIR
 	case errors.Is(err, vfs.ErrNotEmpty):
 		return syscall.ENOTEMPTY
+	case errors.Is(err, vfs.ErrNameTooLong):
+		return syscall.ENAMETOOLONG
 	case errors.Is(err, fs.ErrInvalid):
 		return syscall.EINVAL
+	case errors.Is(err, fs.ErrPermission):
+		return syscall.EPERM
 	case errors.Is(err, vfs.ErrTooBig):
 		return syscall.EFBIG
+	case errors.Is(err, vfs.ErrNoSpace):
+		return syscall.ENOSPC
+	case errors.Is(err, vfs.ErrTooManyLinks):
+		return syscall.EMLINK
 	case errors.Is(err, vfs.ErrReadOnly), errors.Is(err, vfs.ErrStaleRound), errors.Is(err, vfs.ErrJournal), errors.Is(err, vfs.ErrClosed):
 		return syscall.EROFS
 	case errors.Is(err, vfs.ErrFull):
@@ -122,21 +149,6 @@ func patient(req context.Context) (context.Context, context.CancelFunc) {
 		}
 	}()
 	return ctx, cancel
-}
-
-// session is what every node and handle of one mount shares: the Volume and the mount's
-// own context. It is built only by newSession, which refuses a nil context: the work of a
-// read runs on base, and a store client panics on a nil parent the first time it is used.
-type session struct {
-	vol  *vfs.Volume
-	base context.Context
-}
-
-func newSession(base context.Context, vol *vfs.Volume) *session {
-	if base == nil || vol == nil {
-		panic("mount: a session needs a context and a Volume")
-	}
-	return &session{vol: vol, base: base}
 }
 
 // finishGrace is how long the end of a mount waits for its last commit.

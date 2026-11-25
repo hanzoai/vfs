@@ -17,7 +17,7 @@ func internalVolume(t *testing.T, conf Config) (*storetest.Mem, *Volume) {
 	t.Helper()
 	be := storetest.NewMem()
 	conf.Backend, conf.Cipher = be, plainCipher{}
-	conf.Journal, conf.Capacity, conf.Disk = storetest.Journals(), 16<<20, storetest.Disk
+	conf.Journal, conf.JournalCapacity, conf.Disk = storetest.Journals(), 64<<20, storetest.Disk
 	if err := Create(context.Background(), conf); err != nil {
 		t.Fatal(err)
 	}
@@ -259,11 +259,14 @@ func TestHeadRejectsGarbage(t *testing.T) {
 	}
 }
 
-// TestHeadNeeds: every Needs bit is unknown to this build, so every Head that sets one
-// is refused with ErrNeeds, with or without trailing fields, and one that sets none is
-// read whatever trails it.
+// TestHeadNeeds: every Needs bit but links is unknown to this build, so every Head that
+// sets one is refused with ErrNeeds, with or without trailing fields, and one that sets
+// none is read whatever trails it.
 func TestHeadNeeds(t *testing.T) {
 	for bit := range 64 {
+		if bit == tagLinks {
+			continue // known: TestLinksBitIsKnown
+		}
 		h := Head{Seq: 1, Next: 2, Needs: 1 << bit}
 		if _, err := unmarshalHead(h.marshal()); !errors.Is(err, ErrNeeds) {
 			t.Fatalf("Needs bit %d: %v, want ErrNeeds", bit, err)
@@ -424,11 +427,11 @@ func TestInodeRecordIsExtensible(t *testing.T) {
 	in := Inode{ID: 7, Mode: fs.ModeDir | 0o750, Size: 99, Mtime: now, Atime: now.Add(time.Second), Ctime: now.Add(2 * time.Second)}
 	base := encodeInode(in)
 
-	// A newer library's record: the same fields, then tags 9 and 12 this one lacks.
+	// A newer library's record: the same fields, then tags 40 and 42 this one lacks.
 	var later writer
-	later.uvarint(9)
+	later.uvarint(40)
 	later.bytes([]byte("owner=1000"))
-	later.uvarint(12)
+	later.uvarint(42)
 	later.bytes([]byte{0xff, 0x01, 0x02})
 	newer := append(append([]byte(nil), base...), later.b...)
 

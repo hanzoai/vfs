@@ -227,7 +227,7 @@ func runsRun(t *testing.T, seed uint64, canonical bool) {
 		t.Fatal(err)
 	}
 	mk := func(round uint64) *Volume {
-		cf := Config{Backend: be, Cipher: c, Round: round, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk}
+		cf := Config{Backend: be, Cipher: c, Round: round, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk}
 		if !canonical {
 			cf.Dirty, cf.Overlay, cf.Cache = 150<<10, 5, 1<<20
 		}
@@ -271,8 +271,11 @@ func runsRun(t *testing.T, seed uint64, canonical bool) {
 			t.Fatal(err)
 		}
 		runsCompare(t, what+" cold", cold, in.ID, m, rng)
+		_ = cold.Close()
 		round++
+		prev := v
 		v = mk(round)
+		_ = prev.Close()
 		runsCompare(t, what+" takeover", v, in.ID, m, rng)
 		f, err = v.Open(ctx, in.ID)
 		if err != nil {
@@ -326,6 +329,7 @@ func runsRun(t *testing.T, seed uint64, canonical bool) {
 		}
 	}
 	settle(fmt.Sprintf("seed %d end", seed))
+	_ = v.Close()
 }
 
 func briefRuns(es []extent) string {

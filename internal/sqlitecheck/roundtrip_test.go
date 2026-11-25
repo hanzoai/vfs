@@ -31,7 +31,7 @@ func newMem(t testing.TB) (*storetest.Mem, vfs.Cipher, *vfs.Volume) {
 	}
 	c := vfs.Hybrid(k)
 	cfg := func(round uint64) vfs.Config {
-		return vfs.Config{Backend: be, Cipher: c, Round: round, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk}
+		return vfs.Config{Backend: be, Cipher: c, Round: round, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk}
 	}
 	if err := vfs.Create(ctx, cfg(0)); err != nil {
 		t.Fatal(err)

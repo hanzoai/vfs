@@ -5,13 +5,14 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 )
 
 // TestRecutHonoursItsContext: cutting a file's bytes into chunks stops when the publisher's
 // context ends (the Volume is closed), and nothing is lost: the generation is made again whole
 // by a publication with a live context, and the file is what was written.
 func TestRecutHonoursItsContext(t *testing.T) {
-	be, v := internalVolume(t, Config{})
+	be, v := internalVolume(t, Config{Bound: time.Hour})
 	in, err := v.Create(context.Background(), RootInode, "f", 0o644)
 	if err != nil {
 		t.Fatal(err)

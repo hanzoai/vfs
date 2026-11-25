@@ -59,6 +59,8 @@ type Config struct {
 	Round   uint64          // Attach, Reseal: the Round to claim; must exceed the recorded one, and be above 0
 	Verify  bool            // Reseal: read every shard the Head reaches and check every pack it needs is there, not only the root
 
+	Capacity int64 // bytes the Volume may hold: a write past it is refused with ErrNoSpace; 0 for no limit
+
 	Cache   int64 // bytes of shards and chunks kept decoded; default 256 MiB
 	Dirty   int64 // bytes of changes held in memory that the store does not have yet; past it a change waits for a publication; default 1 GiB
 	Overlay int   // metadata changes held in memory that the store does not have yet, with the same effect; default 262144
@@ -68,10 +70,10 @@ type Config struct {
 	// Sync survives the process and the machine, and the store has the change within Bound.
 	// It must not be on memory (the journal refuses it), and is required to Attach.
 	Journal string
-	// Capacity is the most disk the journal uses, in bytes; default 4 GiB. When the changes
-	// the store has not taken fill it, a change is refused with ErrFull; from three quarters
-	// full a change is slowed.
-	Capacity int64
+	// JournalCapacity is the most disk the journal uses, in bytes; default 4 GiB. When the
+	// changes the store has not taken fill it, a change is refused with ErrFull; from three
+	// quarters full a change is slowed.
+	JournalCapacity int64
 	// Bound is how long a change may wait to be published while the store answers;
 	// default 5 s. The clock starts at the change's own acknowledgement and no later
 	// change moves it. When the store does not answer it cannot be kept, and State says so.
@@ -103,8 +105,8 @@ func (c Config) valid() (Config, error) {
 	if c.Overlay <= 0 {
 		c.Overlay = 1 << 18
 	}
-	if c.Capacity <= 0 {
-		c.Capacity = 4 << 30
+	if c.JournalCapacity <= 0 {
+		c.JournalCapacity = 4 << 30
 	}
 	if c.Bound <= 0 {
 		c.Bound = 5 * time.Second
@@ -173,6 +175,7 @@ type Volume struct {
 	files      map[InodeID]*fileState
 	dirtyFiles map[InodeID]*fileState // the files whose live layer holds a change
 	gone       []InodeID              // files removed since the last generation was cut
+	goneSet    map[InodeID]struct{}   // set of files removed since the last generation was cut
 	dirty      int64
 	logged     int64  // bytes of journal the changes since the last generation was cut took
 	applied    uint64 // the journal sequence of the last change applied
@@ -182,6 +185,9 @@ type Volume struct {
 	failed     error
 	closed     bool
 	reclaiming bool // a publication has finished and its journal space is being given back
+
+	ns   counters // usage and links, written into every Head
+	dirn dirCache // link counts of directories
 
 	led      *ledger
 	recovery Recovery
@@ -212,12 +218,13 @@ func newVolume(cfg Config) *Volume {
 		over:       newOverlay(),
 		files:      map[InodeID]*fileState{},
 		dirtyFiles: map[InodeID]*fileState{},
+		goneSet:    map[InodeID]struct{}{},
 		freed:      make(chan struct{}),
 		kick:       make(chan struct{}, 1),
 		quit:       make(chan struct{}),
 		done:       make(chan struct{}),
 	}
-	v.record = int(min(4<<20, v.segment()/4))
+	v.record = int(min(4<<20, v.segment()/2))
 	v.mem = cfg.Budget
 	v.base, v.stop = context.WithCancel(context.Background())
 	return v
@@ -250,7 +257,7 @@ func Create(ctx context.Context, cfg Config) error {
 		}
 	}
 	v.adopt(h)
-	now := time.Now()
+	now := v.Now()
 	root := Inode{ID: RootInode, Mode: fs.ModeDir | 0o755, Mtime: now, Atime: now, Ctime: now}
 	if h.Root, err = v.t.apply(ctx, none, []mut{{key: keyInode(RootInode), val: encodeInode(root)}}); err != nil {
 		return err
@@ -288,6 +295,9 @@ func Open(ctx context.Context, cfg Config) (*Volume, error) {
 		return nil, err
 	}
 	v.adopt(h)
+	if err := v.ns.load(h); err != nil {
+		return nil, err
+	}
 	return v, nil
 }
 
@@ -340,6 +350,9 @@ func Attach(ctx context.Context, cfg Config) (*Volume, error) {
 		return nil, err
 	}
 	v.adopt(h)
+	if err := v.ns.load(h); err != nil {
+		return nil, err
+	}
 	v.round = cfg.Round
 	if err := v.mount(ctx, recorded); err != nil {
 		v.stop()
@@ -476,8 +489,10 @@ func (v *Volume) patience(ctx context.Context, i int) context.Context {
 // mutate makes one change. build reads the Volume (from memory: it is given a local
 // context) and returns the change; the change is sealed, appended to the journal, and
 // applied, with no other change in between, and the journal's sequence of it is returned.
-// If the journal refuses the change nothing has changed. A change that needs a shard the
-// cache lacks is built again after the shard is loaded, with no lock held while it is.
+// If build returns (nil, nil), nothing is appended to the journal (a no-op, or an
+// in-memory-only orphan mutation). If the journal refuses the change nothing has changed.
+// A change that needs a shard the cache lacks is built again after the shard is loaded,
+// with no lock held while it is.
 func (v *Volume) mutate(ctx context.Context, build func(context.Context) (*change, error)) (uint64, error) {
 	for i := 0; ; i++ {
 		if err := v.admit(ctx); err != nil {
@@ -498,31 +513,11 @@ func (v *Volume) mutate(ctx context.Context, build func(context.Context) (*chang
 			}
 			continue
 		}
-		if err != nil {
+		if err != nil || c == nil {
 			v.wmu.Unlock()
 			return 0, err
 		}
-		seq, err := v.append(ctx, c)
-		for errors.Is(err, journal.ErrFull) && v.draining() {
-			// The journal is full of changes a publication is taking: the writer is slowed to
-			// the speed of the drain, not refused, until the drain stops making progress.
-			wait := v.waitDrained()
-			select {
-			case <-wait:
-			case <-ctx.Done():
-				err = ctx.Err()
-			case <-v.base.Done():
-				err = ErrClosed
-			}
-			if err == nil || errors.Is(err, journal.ErrFull) {
-				seq, err = v.append(ctx, c)
-			} else {
-				break
-			}
-		}
-		logged := int64(len(c.sealed))
-		giveBuffer(c.sealed) // the journal has copied it, or does not take the change
-		c.sealed = nil
+		seq, logged, err := v.appendWithBackpressure(ctx, c)
 		if err != nil {
 			v.wmu.Unlock()
 			return 0, err
@@ -538,6 +533,195 @@ func (v *Volume) mutate(ctx context.Context, build func(context.Context) (*chang
 		}
 		return seq, nil
 	}
+}
+
+// appendWithBackpressure appends c to the journal, waiting for a progressing publication
+// if the journal is temporarily full, and releases c.sealed back to the pool. wmu is held.
+func (v *Volume) appendWithBackpressure(ctx context.Context, c *change) (uint64, int64, error) {
+	seq, err := v.append(ctx, c)
+	for errors.Is(err, journal.ErrFull) && v.draining() {
+		// The journal is full of changes a publication is taking: the writer is slowed to
+		// the speed of the drain, not refused, until the drain stops making progress.
+		wait := v.waitDrained()
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			err = ctx.Err()
+		case <-v.base.Done():
+			err = ErrClosed
+		}
+		if err == nil || errors.Is(err, journal.ErrFull) {
+			seq, err = v.append(ctx, c)
+		} else {
+			break
+		}
+	}
+	logged := int64(len(c.sealed))
+	if c.sealed != nil {
+		giveBuffer(c.sealed) // the journal has copied it, or does not take the change
+		c.sealed = nil
+	}
+	return seq, logged, err
+}
+
+// mutateWrite performs a File.WriteAt as an atomic batch with respect to concurrent
+// readers and generation cuts: all journal pieces (each <= v.record) are sealed before
+// taking wmu, appended to the journal under wmu, and applied together under one mu.Lock()
+// so no generation cut or reader ever sees a half-written WriteAt. Only if a single
+// WriteAt exceeds the entire empty journal capacity does it flush its prefix to avoid
+// deadlock.
+func (v *Volume) mutateWrite(ctx context.Context, f *fileState, off uint64, p []byte) (int, error) {
+	when := v.Now()
+	// Fast path for orphans: memory-only, no journal sealing or append.
+	v.mu.RLock()
+	orphan := f.orphan
+	v.mu.RUnlock()
+	if orphan {
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		if err := v.writable(); err != nil {
+			return 0, err
+		}
+		if f.gone {
+			return 0, fs.ErrNotExist
+		}
+		if end := off + uint64(len(p)); v.cfg.Capacity > 0 && end > f.size {
+			if grow := end - max(off, f.size); v.used()+int64(grow) > v.cfg.Capacity {
+				return 0, fmt.Errorf("%w: capacity %d", ErrNoSpace, v.cfg.Capacity)
+			}
+		}
+		v.write(f, p, off)
+		f.size = max(f.size, off+uint64(len(p)))
+		f.mtime, f.ctime = when, when
+		return len(p), nil
+	}
+
+	// Build and seal all pieces before acquiring wmu so sealing does not serialize writers.
+	nPieces := (len(p) + v.record - 1) / v.record
+	cs := make([]*change, 0, nPieces)
+	defer func() {
+		for _, c := range cs {
+			if c.sealed != nil {
+				giveBuffer(c.sealed)
+				c.sealed = nil
+			}
+		}
+	}()
+	curOff := off
+	for rem := p; len(rem) > 0; {
+		piece := rem[:min(len(rem), v.record)]
+		c := &change{kind: changeWrite, ino: f.ino, file: f, off: curOff, data: piece, when: when, ctime: when}
+		sealed, err := v.sealChange(c)
+		if err != nil {
+			return 0, err
+		}
+		c.sealed = sealed
+		cs = append(cs, c)
+		rem = rem[len(piece):]
+		curOff += uint64(len(piece))
+	}
+
+	if err := v.admit(ctx); err != nil {
+		return 0, err
+	}
+	v.wmu.Lock()
+	defer v.wmu.Unlock()
+
+	// Check writability, capacity, and orphan status under mu.
+	v.mu.Lock()
+	if err := v.writable(); err != nil {
+		v.mu.Unlock()
+		return 0, err
+	}
+	if f.gone {
+		v.mu.Unlock()
+		return 0, fs.ErrNotExist
+	}
+	if end := off + uint64(len(p)); v.cfg.Capacity > 0 && end > f.size {
+		if grow := end - max(off, f.size); v.used()+int64(grow) > v.cfg.Capacity {
+			v.mu.Unlock()
+			return 0, fmt.Errorf("%w: capacity %d", ErrNoSpace, v.cfg.Capacity)
+		}
+	}
+	if f.orphan {
+		v.write(f, p, off)
+		f.size = max(f.size, off+uint64(len(p)))
+		f.mtime, f.ctime = when, when
+		v.mu.Unlock()
+		return len(p), nil
+	}
+	v.mu.Unlock()
+
+	seqs := make([]uint64, len(cs))
+	logs := make([]int64, len(cs))
+	appliedFrom := 0
+	doneBytes := 0
+
+	applyRange := func(lo, hi int) bool {
+		if lo >= hi {
+			return false
+		}
+		v.mu.Lock()
+		for k := lo; k < hi; k++ {
+			v.apply(cs[k], seqs[k])
+			v.logged += logs[k]
+			doneBytes += len(cs[k].data)
+		}
+		early := v.gen == nil && v.pressure()
+		v.mu.Unlock()
+		return early
+	}
+
+	for i, c := range cs {
+		seq, err := v.append(ctx, c)
+		for errors.Is(err, journal.ErrFull) {
+			// If our own unapplied pieces filled an otherwise empty journal (a single write
+			// larger than the journal), apply them now so the publisher can drain them.
+			if !v.draining() && i > appliedFrom {
+				v.mu.RLock()
+				healthy := v.pubErr == nil
+				v.mu.RUnlock()
+				if healthy {
+					applyRange(appliedFrom, i)
+					appliedFrom = i
+				}
+			}
+			if !v.draining() {
+				break
+			}
+			wait := v.waitDrained()
+			select {
+			case <-wait:
+			case <-ctx.Done():
+				err = ctx.Err()
+			case <-v.base.Done():
+				err = ErrClosed
+			}
+			if err == nil || errors.Is(err, journal.ErrFull) {
+				seq, err = v.append(ctx, c)
+			} else {
+				break
+			}
+		}
+		logged := int64(len(c.sealed))
+		if c.sealed != nil {
+			giveBuffer(c.sealed)
+			c.sealed = nil
+		}
+		if err != nil {
+			// Apply any pieces already appended to the journal so memory matches the log.
+			if applyRange(appliedFrom, i) {
+				v.wake()
+			}
+			return doneBytes, err
+		}
+		seqs[i], logs[i] = seq, logged
+	}
+
+	if applyRange(appliedFrom, len(cs)) {
+		v.wake()
+	}
+	return doneBytes, nil
 }
 
 // sealChange seals a change for the journal.
@@ -585,11 +769,33 @@ func (v *Volume) apply(c *change, seq uint64) {
 		f := c.file
 		v.write(f, c.data, c.off)
 		f.size = max(f.size, c.off+uint64(len(c.data)))
-		f.mtime = c.when
+		f.mtime, f.ctime = c.when, c.when
 		v.touch(f, seq)
 	case changeSize:
 		f := c.file
-		v.truncate(f, c.size, c.when)
+		ct := c.ctime
+		if ct.IsZero() {
+			ct = c.when
+		}
+		v.truncate(f, c.size, c.when, ct)
+		for _, m := range c.muts {
+			if m.del {
+				v.over.del(m.key)
+			} else {
+				v.over.put(m.key, m.val)
+				if len(m.key) == prefixLen && m.key[0] == tInode {
+					if in, err := decodeInode(inoOf(m.key), m.val); err == nil {
+						if fs := v.files[in.ID]; fs != nil {
+							fs.mtime, fs.ctime = in.Mtime, in.Ctime
+						}
+					}
+				}
+			}
+		}
+		v.touch(f, seq)
+	case changePunch:
+		f := c.file
+		v.punch(f, c.off, c.size, c.when)
 		v.touch(f, seq)
 	case changeTree:
 		for _, m := range c.muts {
@@ -597,9 +803,49 @@ func (v *Volume) apply(c *change, seq uint64) {
 				v.over.del(m.key)
 			} else {
 				v.over.put(m.key, m.val)
+				if len(m.key) == prefixLen && m.key[0] == tInode {
+					if in, err := decodeInode(inoOf(m.key), m.val); err == nil {
+						if fs := v.files[in.ID]; fs != nil {
+							fs.mtime, fs.ctime = in.Mtime, in.Ctime
+						}
+					}
+				}
 			}
 		}
+		if c.dFiles < 0 {
+			v.ns.files -= min(v.ns.files, uint64(-c.dFiles))
+		} else {
+			v.ns.files += uint64(c.dFiles)
+		}
+		if c.dBytes < 0 {
+			v.ns.bytes -= min(v.ns.bytes, uint64(-c.dBytes))
+		} else {
+			v.ns.bytes += uint64(c.dBytes)
+		}
+		if c.dLinked < 0 {
+			v.ns.linked -= min(v.ns.linked, uint64(-c.dLinked))
+		} else {
+			v.ns.linked += uint64(c.dLinked)
+		}
+		if c.setLinks {
+			v.ns.links = true
+		}
+		for _, b := range c.dirBumps {
+			v.dirn.bump(b.dir, int(b.delta))
+		}
 		for _, id := range c.gone {
+			if f := v.files[id]; f != nil && f.refs > 0 {
+				// Live unlinked file held by open handles: becomes an in-memory orphan.
+				f.orphan = true
+				if in, ok := c.orphans[id]; ok {
+					f.attr = in
+					f.ctime = in.Ctime
+				}
+				delete(v.dirtyFiles, id)
+				v.gone = append(v.gone, id)
+				v.goneSet[id] = struct{}{}
+				continue
+			}
 			v.forget(id)
 		}
 		v.next = max(v.next, c.next)
@@ -623,6 +869,7 @@ func (v *Volume) forget(id InodeID) {
 	}
 	delete(v.dirtyFiles, id)
 	v.gone = append(v.gone, id)
+	v.goneSet[id] = struct{}{}
 }
 
 // admit holds a change back while the Volume holds more that the store does not have
@@ -689,7 +936,7 @@ func (v *Volume) waitDrained() <-chan struct{} {
 // the bound says it must be: an eighth of what memory may hold, or a quarter of the journal.
 // mu is held.
 func (v *Volume) pressure() bool {
-	return v.dirty >= v.cfg.Dirty/8 || v.over.n >= v.cfg.Overlay/8 || v.logged >= v.cfg.Capacity/4
+	return v.dirty >= v.cfg.Dirty/8 || v.over.n >= v.cfg.Overlay/8 || v.logged >= v.cfg.JournalCapacity/4
 }
 
 // syncTo makes the journal's records up to seq durable on this node.
@@ -723,6 +970,10 @@ func (v *Volume) SyncInode(ctx context.Context, ino InodeID) error {
 	v.mu.RLock()
 	seq := v.applied
 	if f := v.files[ino]; f != nil {
+		if f.orphan {
+			v.mu.RUnlock()
+			return nil
+		}
 		seq = f.dep
 	}
 	v.mu.RUnlock()
@@ -980,12 +1231,39 @@ func (v *Volume) replay(ctx context.Context, c *change, seq uint64) error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	switch c.kind {
-	case changeWrite, changeSize:
+	case changeWrite, changeSize, changePunch:
 		f, err := v.state(ctx, c.ino)
 		if err != nil {
 			return fmt.Errorf("change %d is for inode %d: %w", seq, c.ino, err)
 		}
 		c.file = f
+	case changeTree:
+		// If a generation settled a file right before a crash, the file's data records
+		// in the committed Head may differ from those staged when the drop was logged.
+		// Recompute the actual data deletions and bytes held from the current tree so
+		// usage and tData stay exact.
+		if len(c.gone) > 0 {
+			var actualHeld uint64
+			for _, id := range c.gone {
+				data, err := v.scan(ctx, key(tData, uint64(id)))
+				if err != nil {
+					return err
+				}
+				for _, r := range data {
+					if len(r.key) == prefixLen {
+						actualHeld += uint64(len(r.val))
+					} else {
+						e, err := decodeExtent(offsetOf(r.key), r.val)
+						if err != nil {
+							return err
+						}
+						actualHeld += uint64(e.n)
+					}
+					c.muts = append(c.muts, mut{key: bytes.Clone(r.key), del: true})
+				}
+			}
+			c.dBytes = -int64(actualHeld)
+		}
 	}
 	v.apply(c, seq)
 	v.tail = seq

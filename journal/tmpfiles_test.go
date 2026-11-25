@@ -12,7 +12,7 @@ import (
 
 func TestOnlyOurTempFilesAreRemoved(t *testing.T) {
 	ours := []string{"000003.seg.tmp", "000000.seg.tmp", "7.seg.tmp"}
-	theirs := []string{"notes.tmp", "000003.tmp", "x.seg.tmp", ".seg.tmp", ".tmp", "000003.seg.tmp.tmp", "000003.SEG.tmp", "a.tmp", "000003.seg.bak"}
+	theirs := []string{"notes.tmp", "000003.tmp", "x.seg.tmp", ".seg.tmp", ".tmp", "000003.seg.tmp.tmp", "000004.SEG.tmp", "a.tmp", "000003.seg.bak"}
 	for _, refused := range []bool{false, true} {
 		dir := filepath.Join(scratch(t), "j")
 		if err := os.MkdirAll(dir, 0o700); err != nil {

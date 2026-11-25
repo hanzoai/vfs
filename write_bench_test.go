@@ -13,7 +13,7 @@ import (
 func BenchmarkWriteAt(b *testing.B) {
 	for _, size := range []int{4 << 10, 128 << 10, 1 << 20} {
 		b.Run(byteSize(size), func(b *testing.B) {
-			_, _, v, _ := pair(b, nil, func(c *vfs.Config) { c.Capacity = 1 << 30 })
+			_, _, v, _ := pair(b, nil, func(c *vfs.Config) { c.JournalCapacity = 1 << 30 })
 			in, err := v.Create(ctx, vfs.RootInode, "f", 0o644)
 			if err != nil {
 				b.Fatal(err)

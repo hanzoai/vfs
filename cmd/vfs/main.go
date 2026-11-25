@@ -105,7 +105,7 @@ func run(ctx context.Context, args []string, stdin io.Reader, stdout io.Writer) 
 		if err != nil {
 			return vfs.Config{}, err
 		}
-		cfg := vfs.Config{Backend: be, Cipher: c, Round: rnd, Cache: cache, Journal: journal, Capacity: capacity}
+		cfg := vfs.Config{Backend: be, Cipher: c, Round: rnd, Cache: cache, Journal: journal, JournalCapacity: capacity}
 		if rnd != 0 && cfg.Journal == "" {
 			dir, err := os.UserCacheDir()
 			if err != nil {

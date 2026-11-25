@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -141,7 +142,7 @@ func pair(t testing.TB, wrap func(backend.Backend) backend.Backend, edit func(*v
 // fresh view of the store has everything.
 func TestFsyncAsksTheStoreForNothing(t *testing.T) {
 	var cnt *counted
-	mem, c, v, _ := pair(t, func(b backend.Backend) backend.Backend { cnt = &counted{Backend: b}; return cnt }, nil)
+	mem, c, v, _ := pair(t, func(b backend.Backend) backend.Backend { cnt = &counted{Backend: b}; return cnt }, func(c *vfs.Config) { c.Bound = time.Hour })
 	if _, err := v.Stat(ctx, vfs.RootInode); err != nil { // the root shard, which a cold Volume reads once
 		t.Fatal(err)
 	}
@@ -205,7 +206,7 @@ func TestFsyncAsksTheStoreForNothing(t *testing.T) {
 // process ends without a Flush, an Attach replays the journal, publishes it under its own
 // Round, and takes nothing from the file that was fsynced.
 func TestProcessCrashReplays(t *testing.T) {
-	mem, c, v, _ := pair(t, nil, nil)
+	mem, c, v, _ := pair(t, nil, func(c *vfs.Config) { c.Bound = time.Hour })
 	want := map[string][]byte{}
 	for i := range 20 {
 		name := fmt.Sprintf("f%02d", i)
@@ -285,7 +286,7 @@ func TestReplayTwice(t *testing.T) {
 			}
 			return nil
 		}}
-	}, nil)
+	}, func(c *vfs.Config) { c.Bound = time.Hour })
 	data := content(5, 700<<10)
 	write(t, v, vfs.RootInode, "a", data)
 	write(t, v, vfs.RootInode, "b", []byte("small"))
@@ -543,7 +544,7 @@ func TestGenerationOrdering(t *testing.T) {
 	empty := blake3.Sum256(nil)
 	for i, view := range views {
 		for p, h := range view {
-			if final[p] != h && h != hex.EncodeToString(empty[:8]) {
+			if final[p] != h && !strings.HasPrefix(h, hex.EncodeToString(empty[:8])+" ") {
 				t.Fatalf("view %d had %s as %s, the end has %s", i, p, h, final[p])
 			}
 		}
@@ -562,7 +563,7 @@ func TestBackpressureAndRecovery(t *testing.T) {
 			}
 			return nil
 		}}
-	}, func(c *vfs.Config) { c.Capacity = 8 << 20 })
+	}, func(c *vfs.Config) { c.JournalCapacity = 8 << 20 })
 	in, err := v.Create(ctx, vfs.RootInode, "log", 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -618,7 +619,7 @@ func TestMemoryBoundWaitsThenRefuses(t *testing.T) {
 			}
 			return nil
 		}}
-	}, func(c *vfs.Config) { c.Capacity, c.Dirty = 256<<20, 1<<20 })
+	}, func(c *vfs.Config) { c.JournalCapacity, c.Dirty = 256<<20, 1<<20 })
 	in, err := v.Create(ctx, vfs.RootInode, "big", 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -731,7 +732,7 @@ func TestJournalIsToldAfterTheHead(t *testing.T) {
 // A journal much smaller than what is written does not fill while the store answers: the
 // Volume publishes when a quarter of the journal is taken, and the writer is not refused.
 func TestJournalFillPublishesEarly(t *testing.T) {
-	mem, c, v, _ := pair(t, nil, func(c *vfs.Config) { c.Capacity = 8 << 20 })
+	mem, c, v, _ := pair(t, nil, func(c *vfs.Config) { c.JournalCapacity = 8 << 20 })
 	in, err := v.Create(ctx, vfs.RootInode, "big", 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -769,7 +770,7 @@ func TestOneBudgetBoundsManyVolumes(t *testing.T) {
 	for range volumes {
 		st := &stall{on: func(string) bool { return armed.Load() }, entered: make(chan struct{}, 1), release: release}
 		_, _, v, _ := pair(t, func(b backend.Backend) backend.Backend { st.Backend = b; return st }, func(c *vfs.Config) {
-			c.Budget, c.Capacity = budget, 16<<20
+			c.Budget, c.JournalCapacity = budget, 16<<20
 		})
 		// Created before the store stops answering: the stall holds writes, and a create is not one.
 		in, err := v.Create(ctx, vfs.RootInode, "f", 0o644)

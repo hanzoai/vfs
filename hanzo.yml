@@ -12,8 +12,9 @@
 #   unit             the engine's unit tests (-short)
 #   race             the tests with goroutines, under the race detector (-short)
 #   model            the tests that run random operations against a plain model, in
-#                    -short size: no goroutines, so no race detector, which would
-#                    multiply the hashing and sealing they do tenfold
+#                    -short size (bytes and holes, and a tree of names with renames,
+#                    links and unlink while open): no goroutines, so no race detector,
+#                    which would multiply the hashing and sealing they do tenfold
 #   sparse           the randomised tests of holes at full size (not -short)
 #   sparse-tiny      the same with tiny bounds, 40 seeds
 #   sqlite           the packages that run a real SQLite engine on a Volume
@@ -23,7 +24,7 @@
 #   realserver-kill  a writer killed at random moments, against the real server
 #   scale-a/b/c      the measurements: 100,000 files, a million inodes, sync cost, the
 #                    object budget, a petabyte, amplification (-short skips them)
-#   fuzz             the model run over many more seeds
+#   fuzz             the models run over many more seeds
 #   fuzz-head        the Head parser against a decoder written from the text, coverage-guided
 #   internal         the hash (internal/blake3) and the buffer pool (internal/bufpool), under
 #                    the race detector: their tests check the digests against the official
@@ -35,7 +36,7 @@
 # there is no environment switch.
 #
 # The tests on a kernel mount are not gates here. They assert what Linux's FUSE does
-# (a close is not interrupted by the kernel, truncate and chmod answer as Linux's do,
+# (a close is not interrupted by the kernel, rename, links, truncate and chmod answer as Linux's do,
 # an unmount ends the server), and need /dev/fuse and a fusermount3 that mounts for an
 # unprivileged user, or a user namespace with tools/fusemount in its place
 # (tools/ci/mount.sh). Where the kernel answers FUSE differently they would test that
@@ -111,8 +112,8 @@ test:
     run: |
       set -euo pipefail
       go test -race -short -count=1 ./pkg/...
-      go test -race -short -count=1 -run '^Test(ConcurrentWorkers|NoGoroutineLeak|SameRoundRace|RacingClaims|TakeoverLosesNoAcknowledgedCommit|FenceRefusesOlderRound|AttachNeedsAHigherRound|AttachLostAckIsNotStale|StalledCommitStallsNobody|DeposedWriterIsToldAtItsNextCommit|LostAckNoLostUpdateNoDuplicate|LostAckThenTakeoverIsNotReportedLost|VolumeOnEveryStore|FsyncAsksTheStoreForNothing|ProcessCrashReplays|ReplayTwice|TakeoverOnAnotherNodeSaysWhatItCannotKnow|TakeoverDuringPublication|BoundIsKeptFromEachAcknowledgement|GenerationOrdering|BackpressureAndRecovery|MemoryBoundWaitsThenRefuses|ReadsSeeAGenerationInFlight|JournalIsToldAfterTheHead|JournalFillPublishesEarly|SteadyState.*)$' .
-      go test -race -tags fuse -short -count=1 -run '^Test(InterruptIsEINTR|FsyncWaitsForTheJournalAndNothingElse|CloseAsksForNothing|ReadWaitsForItsData|FsyncCallersDoNotTouchTheStore|SessionRefusesANilContext|LookedUpFileReadsOnTheMountContext|CreateOfAnExistingFileOpensIt|LookupIsNotAnsweredEINTR|AttrIsNotAnsweredEINTR|ReaddirIsNotAnsweredEINTR|MkdirIsNotAnsweredEINTR|RemoveIsNotAnsweredEINTR|CreateIsNotAnsweredEINTR|NodesAreBuiltOnlyByTheirConstructors|EveryHandlerOutlivesItsRequest|FinishCommitsWhatTheMountWrote|FinishDoesNotWaitForAStalledCommitForever|FinishDoesNotClaimALostCommitIsLost|FinishReportsTheLostCommitEvenWhenServeFailed|FinishWaitsForASlowCommit|FinishReportsWhatWentWrong|FinishOfAReadOnlyVolumeCommitsNothing|KilledColdLookupIsFreedAfterTheGrace|ErrnoMapping)$' ./pkg/mount
+      go test -race -short -count=1 -run '^Test(ConcurrentWorkers|NoGoroutineLeak|SameRoundRace|RacingClaims|TakeoverLosesNoAcknowledgedCommit|FenceRefusesOlderRound|AttachNeedsAHigherRound|AttachLostAckIsNotStale|StalledCommitStallsNobody|DeposedWriterIsToldAtItsNextCommit|LostAckNoLostUpdateNoDuplicate|LostAckThenTakeoverIsNotReportedLost|VolumeOnEveryStore|NamespaceUnderConcurrency|FsyncAsksTheStoreForNothing|ProcessCrashReplays|ReplayTwice|TakeoverOnAnotherNodeSaysWhatItCannotKnow|TakeoverDuringPublication|BoundIsKeptFromEachAcknowledgement|GenerationOrdering|BackpressureAndRecovery|MemoryBoundWaitsThenRefuses|ReadsSeeAGenerationInFlight|JournalIsToldAfterTheHead|JournalFillPublishesEarly|SteadyState.*|Qualification.*)$' .
+      go test -race -tags fuse -short -count=1 -run '^Test(InterruptIsEINTR|FsyncWaitsForTheJournalAndNothingElse|CloseAsksForNothing|ReadWaitsForItsData|FsyncCallersDoNotTouchTheStore|SessionRefusesANilContext|LookedUpFileReadsOnTheMountContext|CreateOfAnExistingFileOpensIt|LookupIsNotAnsweredEINTR|AttrIsNotAnsweredEINTR|ReaddirIsNotAnsweredEINTR|MkdirIsNotAnsweredEINTR|RemoveIsNotAnsweredEINTR|CreateIsNotAnsweredEINTR|NodesAreBuiltOnlyByTheirConstructors|EveryHandlerOutlivesItsRequest|FinishCommitsWhatTheMountWrote|FinishDoesNotWaitForAStalledCommitForever|FinishDoesNotClaimALostCommitIsLost|FinishReportsTheLostCommitEvenWhenServeFailed|FinishWaitsForASlowCommit|FinishReportsWhatWentWrong|FinishOfAReadOnlyVolumeCommitsNothing|KilledColdLookupIsFreedAfterTheGrace|ErrnoMapping|RenameLinkSymlinkReadlink|SetattrIsTheVolumes|OneInodeIsOneNode|StatfsOfAUsage|AttrOfAnInode|FallocateModes)$' ./pkg/mount
   - name: model
     run: go test -short -count=1 -run '^Test(Sparse|Model|TreeForced)' .
   - name: sparse
@@ -132,7 +133,7 @@ test:
   - name: scale-c
     run: go test -count=1 -timeout 4m -run '^(TestObjectsPerThousandSmallFiles|TestAppendWithFsyncAmplification|TestColdReadAmplification|TestSmallWritesAmplifyMemory|TestFlushLatency|TestSustainedWriteWithFsync|TestTinyExtentsCost|TestPetabyteScattered)$' .
   - name: fuzz
-    run: go test -count=1 -timeout 4m -run '^TestModelFuzzMany$' .
+    run: go test -count=1 -timeout 4m -run '^(TestModelFuzzMany|TestModelPosixMany)$' .
   - name: fuzz-head
     run: go test -count=1 -timeout 3m -run '^$' -fuzz '^FuzzHead$' -fuzztime 20s .
   - name: internal

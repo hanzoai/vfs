@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 
 	"github.com/hanzoai/vfs/journal"
 )
@@ -25,10 +26,12 @@ import (
 
 // ledger is a Volume's journal on this node.
 type ledger struct {
-	j    *journal.Journal
-	aead cipher.AEAD
-	aad  []byte // the lineage: a record opens only in the journal it was sealed for
-	at   places
+	j     *journal.Journal
+	aead  cipher.AEAD
+	aad   []byte // the lineage: a record opens only in the journal it was sealed for
+	at    places
+	salt  [4]byte       // random 32-bit fixed field per journal key (NIST SP 800-38D §8.2.1)
+	nonce atomic.Uint64 // monotonic 64-bit invocation counter: unique per key with zero syscalls
 }
 
 // places are the files of one journal on one node: the directory the journal keeps its
@@ -66,28 +69,32 @@ func newAEAD(key []byte) (cipher.AEAD, error) {
 	return cipher.NewGCM(b)
 }
 
-// seal returns plain sealed for this journal: a random nonce, then the ciphertext and tag.
-// A key is used for the records of one journal, far fewer than the 2^32 under which a
-// random 96-bit nonce is safe.
+// nextNonce writes a unique 96-bit AES-GCM nonce into dst: a 4-byte random salt fixed
+// per journal key followed by an 8-byte strictly increasing invocation counter. Because
+// every journal round generates a fresh 256-bit key and never reopens it for writing,
+// this satisfies NIST SP 800-38D §8.2.1 with zero per-record syscalls and no 2^32
+// birthday collision bound.
+func (l *ledger) nextNonce(dst []byte) {
+	copy(dst[:4], l.salt[:])
+	binary.BigEndian.PutUint64(dst[4:12], l.nonce.Add(1))
+}
+
+// seal returns plain sealed for this journal: a unique nonce, then the ciphertext and tag.
 func (l *ledger) seal(plain []byte) ([]byte, error) {
-	out := make([]byte, l.aead.NonceSize(), l.aead.NonceSize()+len(plain)+l.aead.Overhead())
-	if _, err := rand.Read(out); err != nil {
-		return nil, err
-	}
+	n := l.aead.NonceSize()
+	out := make([]byte, n, n+len(plain)+l.aead.Overhead())
+	l.nextNonce(out)
 	return l.aead.Seal(out, out, plain, l.aad), nil
 }
 
 // sealChange seals a change into a buffer taken from the pool: the nonce, then the change
 // encoded where it will be encrypted, in place, then the tag. The caller gives the buffer
-// back (release) once the journal has copied it.
+// back (giveBuffer) once the journal has copied it.
 func (l *ledger) sealChange(c *change) ([]byte, error) {
 	n := l.aead.NonceSize()
-	buf := takeBuffer(n + 64 + len(c.data) + l.aead.Overhead())
+	buf := takeBuffer(n + 96 + len(c.data) + l.aead.Overhead())
 	buf = buf[:n]
-	if _, err := rand.Read(buf); err != nil {
-		giveBuffer(buf)
-		return nil, err
-	}
+	l.nextNonce(buf)
 	nonce := buf[:n:n]
 	buf = c.encodeTo(buf)
 	plain := buf[n:]
@@ -114,7 +121,7 @@ func (l *ledger) open(sealed []byte) ([]byte, error) {
 
 func (v *Volume) journalOptions(dir string, round, published uint64) (journal.Options, error) {
 	opt := journal.Options{
-		Capacity:  v.cfg.Capacity,
+		Capacity:  v.cfg.JournalCapacity,
 		Segment:   v.segment(),
 		Bound:     v.cfg.Bound,
 		Published: published,
@@ -134,7 +141,7 @@ func (v *Volume) journalOptions(dir string, round, published uint64) (journal.Op
 // segment is the size of the journal's segment files: a sixteenth of its capacity, from a
 // megabyte to the 64 MiB the journal makes by default.
 func (v *Volume) segment() int64 {
-	return min(max(v.cfg.Capacity/16, 1<<20), 64<<20)
+	return min(max(v.cfg.JournalCapacity/16, 1<<20), 64<<20)
 }
 
 // startLedger makes the journal of round: a key of its own, sealed and written before
@@ -146,6 +153,10 @@ func (v *Volume) startLedger(round, published uint64) (*ledger, error) {
 	}
 	key := make([]byte, 32)
 	if _, err := rand.Read(key); err != nil {
+		return nil, err
+	}
+	var salt [4]byte
+	if _, err := rand.Read(salt[:]); err != nil {
 		return nil, err
 	}
 	sealed, err := seal(v.c, keyAAD(v.id, round), key)
@@ -171,7 +182,7 @@ func (v *Volume) startLedger(round, published uint64) (*ledger, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ledger{j: j, aead: aead, aad: lineage(v.id, round), at: at}, nil
+	return &ledger{j: j, aead: aead, aad: lineage(v.id, round), at: at, salt: salt}, nil
 }
 
 // openLedger opens the journal that round left on this node, to replay it. published is the
@@ -190,6 +201,10 @@ func (v *Volume) openLedger(round, published uint64) (*ledger, error) {
 	if err != nil {
 		return nil, err
 	}
+	var salt [4]byte
+	if _, err := rand.Read(salt[:]); err != nil {
+		return nil, err
+	}
 	opt, err := v.journalOptions(at.dir, round, published)
 	if err != nil {
 		return nil, err
@@ -198,7 +213,7 @@ func (v *Volume) openLedger(round, published uint64) (*ledger, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ledger{j: j, aead: aead, aad: lineage(v.id, round), at: at}, nil
+	return &ledger{j: j, aead: aead, aad: lineage(v.id, round), at: at, salt: salt}, nil
 }
 
 // retire ends a journal whose every record is published: the marker is written, then the

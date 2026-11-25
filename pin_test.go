@@ -25,7 +25,7 @@ func TestObjectKeysAreTheSpecShapes(t *testing.T) {
 	if err := Create(ctx, Config{Backend: be, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	v, err := Attach(ctx, Config{Backend: be, Cipher: c, Round: 1, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk})
+	v, err := Attach(ctx, Config{Backend: be, Cipher: c, Round: 1, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk})
 	if err != nil {
 		t.Fatal(err)
 	}

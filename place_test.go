@@ -125,7 +125,7 @@ func TestSwappedHeadIsRefused(t *testing.T) {
 				if _, err := Open(ctx, Config{Backend: open(to), Cipher: c}); err == nil {
 					t.Errorf("the Head of %q was adopted as the Head of %q", from, to)
 				}
-				if _, err := Attach(ctx, Config{Backend: open(to), Cipher: c, Round: 7, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk}); err == nil {
+				if _, err := Attach(ctx, Config{Backend: open(to), Cipher: c, Round: 7, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk}); err == nil {
 					t.Errorf("a writer attached to %q on the Head of %q", to, from)
 				}
 				if err := os.WriteFile(filepath.Join(dir, to, "head"), orig, 0o644); err != nil {
@@ -190,7 +190,7 @@ func TestResealMovesAVolume(t *testing.T) {
 	if err := Create(ctx, Config{Backend: from, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	v, err := Attach(ctx, Config{Backend: from, Cipher: c, Round: 1, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk})
+	v, err := Attach(ctx, Config{Backend: from, Cipher: c, Round: 1, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,13 +228,13 @@ func TestResealMovesAVolume(t *testing.T) {
 	if _, err := Open(ctx, Config{Backend: be2, Cipher: c}); err == nil || !strings.Contains(err.Error(), "Reseal") {
 		t.Fatalf("a moved Volume opened, or its error does not say what to do: %v", err)
 	}
-	if err := Reseal(ctx, Config{Backend: be2, Cipher: c, Round: 1, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk}, from.String()); !errors.Is(err, ErrStaleRound) {
+	if err := Reseal(ctx, Config{Backend: be2, Cipher: c, Round: 1, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk}, from.String()); !errors.Is(err, ErrStaleRound) {
 		t.Fatalf("Reseal at a Round that does not exceed the recorded one = %v, want ErrStaleRound", err)
 	}
-	if err := Reseal(ctx, Config{Backend: be2, Cipher: c, Round: 2, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk}, "file:///nowhere"); err == nil {
+	if err := Reseal(ctx, Config{Backend: be2, Cipher: c, Round: 2, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk}, "file:///nowhere"); err == nil {
 		t.Fatal("Reseal from a place the Head is not sealed for succeeded")
 	}
-	if err := Reseal(ctx, Config{Backend: be2, Cipher: c, Round: 2, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk}, from.String()); err != nil {
+	if err := Reseal(ctx, Config{Backend: be2, Cipher: c, Round: 2, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk}, from.String()); err != nil {
 		t.Fatal(err)
 	}
 	ro, err := Open(ctx, Config{Backend: be2, Cipher: c})
@@ -253,7 +253,7 @@ func TestResealMovesAVolume(t *testing.T) {
 	if string(buf) != string(big) {
 		t.Fatal("a file differs after the move")
 	}
-	w, err := Attach(ctx, Config{Backend: be2, Cipher: c, Round: 3, Journal: storetest.Journals(), Capacity: 16 << 20, Disk: storetest.Disk})
+	w, err := Attach(ctx, Config{Backend: be2, Cipher: c, Round: 3, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk})
 	if err != nil {
 		t.Fatalf("a writer cannot attach after Reseal: %v", err)
 	}

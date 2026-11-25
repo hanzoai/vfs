@@ -50,7 +50,7 @@ func coldWriter(t *testing.T) (*holdsMeta, *vfs.Volume) {
 	if err := vfs.Create(bg, vfs.Config{Backend: h, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	w, err := vfs.Attach(bg, vfs.Config{Backend: h, Cipher: c, Round: 1, Journal: storetest.Journals(), Capacity: 64 << 20})
+	w, err := vfs.Attach(bg, vfs.Config{Backend: h, Cipher: c, Round: 1, Journal: storetest.Journals(), JournalCapacity: 64 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +62,7 @@ func coldWriter(t *testing.T) (*holdsMeta, *vfs.Volume) {
 	if err := w.Flush(bg); err != nil {
 		t.Fatal(err)
 	}
-	cold, err := vfs.Attach(bg, vfs.Config{Backend: h, Cipher: c, Round: 2, Journal: storetest.Journals(), Capacity: 64 << 20})
+	cold, err := vfs.Attach(bg, vfs.Config{Backend: h, Cipher: c, Round: 2, Journal: storetest.Journals(), JournalCapacity: 64 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func interruptedAt(t *testing.T, h *holdsMeta, call func(ctx context.Context) er
 // while the store is slow must be answered by its own result.
 func TestLookupIsNotAnsweredEINTR(t *testing.T) {
 	h, v := coldWriter(t)
-	n := newSession(context.Background(), v).node(vfs.RootInode, vfs.RootInode)
+	n := newSession(context.Background(), v).node(vfs.RootInode)
 	err := interruptedAt(t, h, func(ctx context.Context) error {
 		_, err := n.Lookup(ctx, "b")
 		return err
@@ -110,7 +110,7 @@ func TestLookupIsNotAnsweredEINTR(t *testing.T) {
 
 func TestAttrIsNotAnsweredEINTR(t *testing.T) {
 	h, v := coldWriter(t)
-	n := newSession(context.Background(), v).node(vfs.RootInode, vfs.RootInode)
+	n := newSession(context.Background(), v).node(vfs.RootInode)
 	err := interruptedAt(t, h, func(ctx context.Context) error {
 		var a fuse.Attr
 		return n.Attr(ctx, &a)
@@ -122,7 +122,7 @@ func TestAttrIsNotAnsweredEINTR(t *testing.T) {
 
 func TestReaddirIsNotAnsweredEINTR(t *testing.T) {
 	h, v := coldWriter(t)
-	n := newSession(context.Background(), v).node(vfs.RootInode, vfs.RootInode)
+	n := newSession(context.Background(), v).node(vfs.RootInode)
 	err := interruptedAt(t, h, func(ctx context.Context) error {
 		_, err := n.ReadDirAll(ctx)
 		return err
@@ -135,7 +135,7 @@ func TestReaddirIsNotAnsweredEINTR(t *testing.T) {
 // Tree-changing calls wait: these fail on a mutant that drops context.WithoutCancel.
 func TestMkdirIsNotAnsweredEINTR(t *testing.T) {
 	h, v := coldWriter(t)
-	n := newSession(context.Background(), v).node(vfs.RootInode, vfs.RootInode)
+	n := newSession(context.Background(), v).node(vfs.RootInode)
 	err := interruptedAt(t, h, func(ctx context.Context) error {
 		_, err := n.Mkdir(ctx, &fuse.MkdirRequest{Name: "new", Mode: 0o755})
 		return err
@@ -147,7 +147,7 @@ func TestMkdirIsNotAnsweredEINTR(t *testing.T) {
 
 func TestRemoveIsNotAnsweredEINTR(t *testing.T) {
 	h, v := coldWriter(t)
-	n := newSession(context.Background(), v).node(vfs.RootInode, vfs.RootInode)
+	n := newSession(context.Background(), v).node(vfs.RootInode)
 	err := interruptedAt(t, h, func(ctx context.Context) error {
 		return n.Remove(ctx, &fuse.RemoveRequest{Name: "b"})
 	})
@@ -158,7 +158,7 @@ func TestRemoveIsNotAnsweredEINTR(t *testing.T) {
 
 func TestCreateIsNotAnsweredEINTR(t *testing.T) {
 	h, v := coldWriter(t)
-	n := newSession(context.Background(), v).node(vfs.RootInode, vfs.RootInode)
+	n := newSession(context.Background(), v).node(vfs.RootInode)
 	err := interruptedAt(t, h, func(ctx context.Context) error {
 		_, _, err := n.Create(ctx, &fuse.CreateRequest{Name: "fresh", Mode: 0o644}, &fuse.CreateResponse{})
 		return err
@@ -182,7 +182,7 @@ func TestKilledColdLookupIsFreedAfterTheGrace(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			h, v := coldWriter(t)
-			n := newSession(context.Background(), v).node(vfs.RootInode, vfs.RootInode)
+			n := newSession(context.Background(), v).node(vfs.RootInode)
 			h.armed.Store(true)
 			req, kill := context.WithCancel(context.Background())
 			res := make(chan error, 1)

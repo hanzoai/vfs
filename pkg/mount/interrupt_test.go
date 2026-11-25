@@ -108,7 +108,7 @@ func testVolume(t *testing.T) (*gate, *vfs.Volume, vfs.Cipher, *storetest.Mem) {
 	if err := vfs.Create(bg, vfs.Config{Backend: g, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	v, err := vfs.Attach(bg, vfs.Config{Backend: g, Cipher: c, Round: 1, Journal: storetest.Journals(), Capacity: 64 << 20})
+	v, err := vfs.Attach(bg, vfs.Config{Backend: g, Cipher: c, Round: 1, Journal: storetest.Journals(), JournalCapacity: 64 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -137,7 +137,7 @@ func TestFsyncWaitsForTheJournalAndNothingElse(t *testing.T) {
 	if _, err := f.WriteAt(bg, make([]byte, 200_000), 0); err != nil {
 		t.Fatal(err)
 	}
-	n := newSession(bg, v).node(in.ID, vfs.RootInode)
+	n := newSession(bg, v).node(in.ID)
 	req, interrupt := context.WithCancel(bg)
 	interrupt() // the kernel's FUSE_INTERRUPT arrived before the daemon looked
 	result := make(chan error, 1)
@@ -301,7 +301,7 @@ func TestFsyncCallersDoNotTouchTheStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	g.armed.Store(true)
-	n := newSession(bg, v).node(in.ID, vfs.RootInode)
+	n := newSession(bg, v).node(in.ID)
 	const callers = 3000
 	results := make(chan error, callers)
 	for range callers {
@@ -370,11 +370,11 @@ func TestLookedUpFileReadsOnTheMountContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A fresh server over the same store: nothing cached.
-	v2, err := vfs.Attach(bg, vfs.Config{Backend: storetest.Strict{Backend: mem}, Cipher: c, Round: 2, Journal: storetest.Journals(), Capacity: 64 << 20})
+	v2, err := vfs.Attach(bg, vfs.Config{Backend: storetest.Strict{Backend: mem}, Cipher: c, Round: 2, Journal: storetest.Journals(), JournalCapacity: 64 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := newSession(bg, v2).node(vfs.RootInode, vfs.RootInode)
+	root := newSession(bg, v2).node(vfs.RootInode)
 	// What the kernel does for open("/f"): LOOKUP, OPEN, READ.
 	found, err := root.Lookup(bg, "f")
 	if err != nil {

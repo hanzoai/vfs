@@ -182,61 +182,6 @@ func TestFUSESemantics(t *testing.T) {
 	}
 }
 
-// TestFUSEUnsupportedIsHonest: what the mount does not build answers "not supported",
-// never success. rename, symlink, link, chmod and utimens each return ENOSYS; a
-// success that changed nothing would be believed by tar, make and rsync. Unlinking an
-// open file fails its handle (no orphan inodes yet): that is a limit, not a lie, and
-// it is recorded.
-func TestFUSEUnsupportedIsHonest(t *testing.T) {
-	needFUSE(t)
-	store, mp := newMountpoint(t)
-	key, _ := age.GenerateHybridIdentity()
-	m := mountAt(t, store, mp, key, 1)
-	defer watchdog(t, m, 90*time.Second)()
-
-	p := filepath.Join(mp, "victim")
-	f, _ := os.OpenFile(p, os.O_CREATE|os.O_RDWR, 0o644)
-	f.Write([]byte("before"))
-	if err := os.Remove(p); err != nil {
-		t.Fatal(err)
-	}
-	_, werr := f.Write([]byte("after-unlink"))
-	_, serr := f.Stat()
-	buf := make([]byte, 16)
-	_, rerr := f.ReadAt(buf, 0)
-	t.Logf("write-after-unlink: write=%v fstat=%v read=%v", werr, serr, rerr)
-	f.Close()
-
-	os.WriteFile(filepath.Join(mp, "src"), []byte("x"), 0o644)
-	os.WriteFile(filepath.Join(mp, "dst"), []byte("old"), 0o644)
-	for name, err := range map[string]error{
-		"rename":  os.Rename(filepath.Join(mp, "src"), filepath.Join(mp, "dst")),
-		"symlink": os.Symlink("dst", filepath.Join(mp, "ln")),
-		"link":    os.Link(filepath.Join(mp, "dst"), filepath.Join(mp, "hard")),
-		"chmod":   os.Chmod(filepath.Join(mp, "dst"), 0o600),
-		"chtimes": os.Chtimes(filepath.Join(mp, "dst"), time.Unix(1e9, 0), time.Unix(1e9, 0)),
-	} {
-		// link(2) is the one the kernel words itself: a file system that cannot make
-		// hard links answers EPERM, which POSIX defines as exactly that.
-		if !errors.Is(err, syscall.ENOSYS) && !(name == "link" && errors.Is(err, syscall.EPERM)) {
-			t.Errorf("%s = %v, want ENOSYS", name, err)
-		}
-	}
-	// Nothing moved, nothing was made, nothing changed.
-	if b, _ := os.ReadFile(filepath.Join(mp, "dst")); string(b) != "old" {
-		t.Errorf("a refused rename changed dst to %q", b)
-	}
-	for _, n := range []string{"ln", "hard"} {
-		if _, err := os.Lstat(filepath.Join(mp, n)); err == nil {
-			t.Errorf("a refused operation left %s behind", n)
-		}
-	}
-	if fi, _ := os.Stat(filepath.Join(mp, "dst")); fi.Mode().Perm() != 0o644 {
-		t.Errorf("mode is %v after a refused chmod", fi.Mode().Perm())
-	}
-	m.Stop(t)
-}
-
 // TestFUSEHostileNames: names the kernel will pass through.
 func TestFUSEHostileNames(t *testing.T) {
 	needFUSE(t)

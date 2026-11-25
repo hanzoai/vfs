@@ -59,10 +59,12 @@
 // conditional PUT of the Head has returned success.
 //
 //	call                                   durable when it returns
-//	File.WriteAt, Truncate, Create,        nothing. The change is in memory and in the journal's
-//	  Mkdir, Remove                          buffer: it survives the process ending only if the
-//	                                         journal had written it, and a machine ending only if the
+//	File.WriteAt, Truncate, Punch, Create, nothing. The change is in memory and in the journal's
+//	  Mkdir, Remove, Rename, Link, Symlink,  buffer: it survives the process ending only if the
+//	  Mknod, SetAttr                         journal had written it, and a machine ending only if the
 //	                                         journal had synced it. Visible to every reader at once.
+//	                                         Each operation is atomic in a generation: a Head holds
+//	                                         all of it or none.
 //	File.Sync, Volume.SyncInode,           the journal, for the changes the file depends on (all of
 //	  Volume.Sync                            them, for a directory or the Volume): they survive a crash
 //	                                         of the process and of the machine. Concurrent callers
@@ -81,8 +83,8 @@
 //	                                         Volume on this node publishes it.
 //	Volume.Close                           the journal, whatever was changed and not published; no
 //	                                         request. It does not flush: a caller that hands the Volume
-//	                                         over calls Flush first. A journal with nothing left in it is
-//	                                         removed.
+//	                                         over calls Flush first (the detach sequence is Flush, Close).
+//	                                         A journal with nothing left in it is removed.
 //	Attach, the same node                  every change the previous owner acknowledged with Sync (and
 //	                                         every one its journal had written) is replayed from the
 //	                                         journal, published under the new Round, and in the new

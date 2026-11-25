@@ -32,13 +32,15 @@ const spanCost = 64
 // tree holds: inline bytes, or chunks. Over it lies the frozen layer, the writes that the
 // generation in flight is turning into chunks, which nothing changes any more; and over
 // that the live layer, the writes since. A layer holds the writes that came after what is
-// below it (spans, sorted, disjoint, never touching) and a limit: truncating below the
-// limit voids what the levels below hold past it, so a later extension reads zeros
-// there, not the old bytes. Bytes that no level holds are a hole and read as zero.
+// below it (spans, sorted, disjoint, never touching), a limit (truncating below the limit
+// voids what the levels below hold past it, so a later extension reads zeros there, not
+// the old bytes), and punched voids (ranges punched out of the levels below it). Bytes
+// that no level holds are a hole and read as zero.
 //
 // When the generation that froze a layer is published, the settled content becomes what
 // the layer and the settled content below it made together, the frozen layer goes, and
-// the live layer, whose limit was always about that combined content, stays as it is.
+// the live layer, whose limit and voids were always about that combined content, stays as
+// it is.
 
 // span is a run of bytes written at an offset.
 type span struct {
@@ -52,6 +54,7 @@ type layer struct {
 	dirty  []span // sorted, disjoint, never touching
 	dirtyN int64  // bytes plus spanCost per span
 	limit  uint64 // how much of the content below still counts
+	void   []run  // ranges punched out of the content below; sorted, disjoint, never touching
 }
 
 // fileState is one file's content as the Volume holds it. All handles to a file share
@@ -59,7 +62,13 @@ type layer struct {
 type fileState struct {
 	ino  InodeID
 	refs int  // open handles
-	gone bool // removed; handles fail
+	gone bool // removed with no open handles
+
+	// orphan is a file that was unlinked while a handle held it: no name reaches it, the
+	// tree holds nothing of it, and it lives in memory (attr is its inode) until the last
+	// handle closes.
+	orphan bool
+	attr   Inode
 
 	// dep is the journal sequence of the last change the file depends on: its fsync waits
 	// for it, and for nothing after it.
@@ -73,6 +82,7 @@ type fileState struct {
 
 	size    uint64 // the file's length now
 	mtime   time.Time
+	ctime   time.Time
 	fz      *layer // the writes of the generation in flight, if the file has any in it
 	lv      layer  // the writes since
 	changed bool   // the live layer holds a change, of the bytes or of the length
@@ -98,6 +108,9 @@ func (v *Volume) Open(ctx context.Context, ino InodeID) (*File, error) {
 		if f, err = v.state(ctx, ino); err != nil {
 			return err
 		}
+		if f.orphan {
+			return fmt.Errorf("%w: inode %d was unlinked", fs.ErrNotExist, ino)
+		}
 		f.refs++
 		return nil
 	})
@@ -110,20 +123,26 @@ func (v *Volume) Open(ctx context.Context, ino InodeID) (*File, error) {
 // state returns the file's state, loading it from the tree on first use. mu is held.
 func (v *Volume) state(ctx context.Context, ino InodeID) (*fileState, error) {
 	if f := v.files[ino]; f != nil {
+		if f.orphan && f.refs == 0 {
+			return nil, fmt.Errorf("%w: inode %d", fs.ErrNotExist, ino)
+		}
 		return f, nil
 	}
 	in, err := v.stat(ctx, ino)
 	if err != nil {
 		return nil, err
 	}
-	if in.IsDir() {
+	switch {
+	case in.IsDir():
 		return nil, fmt.Errorf("%w: inode %d", ErrIsDir, ino)
+	case in.Mode&fs.ModeType != 0:
+		return nil, fmt.Errorf("%w: inode %d is not a regular file", fs.ErrInvalid, ino)
 	}
 	recs, err := v.scan(ctx, key(tData, uint64(ino)))
 	if err != nil {
 		return nil, err
 	}
-	f := &fileState{ino: ino, size: in.Size, mtime: in.Mtime, lv: layer{limit: in.Size}, dep: v.applied}
+	f := &fileState{ino: ino, size: in.Size, mtime: in.Mtime, ctime: in.Ctime, lv: layer{limit: in.Size}, dep: v.applied}
 	for _, r := range recs {
 		if len(r.key) == prefixLen {
 			f.inline = r.val
@@ -160,19 +179,10 @@ func (h *File) ReadAt(ctx context.Context, p []byte, off int64) (int, error) {
 		return 0, fmt.Errorf("%w: negative offset %d", fs.ErrInvalid, off)
 	}
 	v := h.v
-	v.mu.RLock()
-	if h.f.gone {
-		v.mu.RUnlock()
-		return 0, fs.ErrNotExist
+	n, root, pieces, err := h.planRead(p, uint64(off))
+	if err != nil {
+		return 0, err
 	}
-	if uint64(off) >= h.f.size {
-		v.mu.RUnlock()
-		return 0, io.EOF
-	}
-	b := h.f.body()
-	root := v.root
-	n, pieces := b.plan(p, uint64(off))
-	v.mu.RUnlock()
 	if err := v.fetch(ctx, root, pieces, p); err != nil {
 		return 0, err
 	}
@@ -180,6 +190,22 @@ func (h *File) ReadAt(ctx context.Context, p []byte, off int64) (int, error) {
 		return n, io.EOF
 	}
 	return n, nil
+}
+
+func (h *File) planRead(p []byte, off uint64) (int, ref, []piece, error) {
+	v := h.v
+	v.mu.RLock()
+	defer v.mu.RUnlock()
+	if h.f.gone {
+		return 0, none, nil, fs.ErrNotExist
+	}
+	if off >= h.f.size {
+		return 0, none, nil, io.EOF
+	}
+	b := h.f.body()
+	root := v.root
+	n, pieces := b.plan(p, off)
+	return n, root, pieces, nil
 }
 
 // body is a file's content as of one moment: the settled content and the layers over it,
@@ -213,7 +239,7 @@ type piece struct {
 // returns how many bytes the file has there, and the pieces that chunks must fill in. It
 // makes no request and reads nothing it does not hold, so it can run under the Volume's
 // lock; what it leaves to the chunks is fetched after the lock is let go, into the bytes
-// that no write covers.
+// that no write or punched hole covers.
 func (b *body) plan(p []byte, off uint64) (int, []piece) {
 	if off >= b.size {
 		return 0, nil
@@ -231,18 +257,32 @@ func (b *body) plan(p []byte, off uint64) (int, []piece) {
 		copy(p[:lim-off], b.inline[off:min(uint64(len(b.inline)), lim)])
 	}
 
-	// A layer's writes show where the layers above it do not void them.
+	// Each layer's voids zero what lies below it, and its writes show where the layers
+	// above it do not void them.
 	var covered []run
 	for i, l := range b.layers {
 		cut := end
 		for _, above := range b.layers[i+1:] {
 			cut = min(cut, above.limit)
 		}
+		if cut <= off {
+			continue
+		}
+		for j := sort.Search(len(l.void), func(j int) bool { return l.void[j].b > off }); j < len(l.void) && l.void[j].a < cut; j++ {
+			r := l.void[j]
+			lo, hi := max(r.a, off), min(r.b, cut)
+			if lo < hi {
+				clear(p[lo-off : hi-off])
+				covered = append(covered, run{lo, hi})
+			}
+		}
 		for j := sort.Search(len(l.dirty), func(j int) bool { return l.dirty[j].end() > off }); j < len(l.dirty) && l.dirty[j].off < cut; j++ {
 			s := l.dirty[j]
 			lo, hi := max(s.off, off), min(s.end(), cut)
-			copy(p[lo-off:hi-off], s.data[lo-s.off:hi-s.off])
-			covered = append(covered, run{lo, hi})
+			if lo < hi {
+				copy(p[lo-off:hi-off], s.data[lo-s.off:hi-s.off])
+				covered = append(covered, run{lo, hi})
+			}
 		}
 	}
 	if b.ext == nil || off >= lim {
@@ -320,30 +360,7 @@ func (h *File) WriteAt(ctx context.Context, p []byte, off int64) (int, error) {
 	if uint64(off)+uint64(len(p)) > MaxSize {
 		return 0, fmt.Errorf("%w: a write to %d", ErrTooBig, uint64(off)+uint64(len(p)))
 	}
-	v := h.v
-	var done int
-	for len(p) > 0 {
-		piece := p[:min(len(p), v.record)]
-		c := &change{kind: changeWrite, ino: h.f.ino, file: h.f, off: uint64(off), data: piece, when: time.Now()}
-		// The record is sealed before the Volume's order is taken: a write costs its own
-		// sealing, not everyone's.
-		sealed, err := v.sealChange(c)
-		if err != nil {
-			return done, err
-		}
-		c.sealed = sealed
-		if _, err := v.mutate(ctx, func(context.Context) (*change, error) {
-			if h.f.gone {
-				return nil, fs.ErrNotExist
-			}
-			return c, nil
-		}); err != nil {
-			return done, err
-		}
-		done += len(piece)
-		p, off = p[len(piece):], off+int64(len(piece))
-	}
-	return done, nil
+	return h.v.mutateWrite(ctx, h.f, uint64(off), p)
 }
 
 // write adds p at off to the live layer's writes, merging with the writes it touches so
@@ -393,7 +410,12 @@ func (h *File) Truncate(ctx context.Context, size uint64) error {
 		if h.f.gone {
 			return nil, fs.ErrNotExist
 		}
-		return &change{kind: changeSize, ino: h.f.ino, file: h.f, size: size, when: time.Now()}, nil
+		now := h.v.Now()
+		if h.f.orphan {
+			h.v.truncate(h.f, size, now, now)
+			return nil, nil
+		}
+		return &change{kind: changeSize, ino: h.f.ino, file: h.f, size: size, when: now, ctime: now}, nil
 	})
 	return err
 }
@@ -408,13 +430,18 @@ func (v *Volume) Truncate(ctx context.Context, ino InodeID, size uint64) error {
 		if err != nil {
 			return nil, err
 		}
-		return &change{kind: changeSize, ino: ino, file: f, size: size, when: time.Now()}, nil
+		now := v.Now()
+		if f.orphan {
+			v.truncate(f, size, now, now)
+			return nil, nil
+		}
+		return &change{kind: changeSize, ino: ino, file: f, size: size, when: now, ctime: now}, nil
 	})
 	return err
 }
 
 // truncate sets the file's length in the live layer. mu is held.
-func (v *Volume) truncate(f *fileState, size uint64, when time.Time) {
+func (v *Volume) truncate(f *fileState, size uint64, when, ctime time.Time) {
 	if size < f.size {
 		f.lv.limit = min(f.lv.limit, size)
 		var kept []span
@@ -431,8 +458,97 @@ func (v *Volume) truncate(f *fileState, size uint64, when time.Time) {
 		}
 		v.account(n - f.lv.dirtyN)
 		f.lv.dirty, f.lv.dirtyN = kept, n
+		for len(f.lv.void) > 0 && f.lv.void[len(f.lv.void)-1].b > size {
+			last := &f.lv.void[len(f.lv.void)-1]
+			if last.a >= size {
+				f.lv.void = f.lv.void[:len(f.lv.void)-1]
+			} else {
+				last.b = size
+			}
+		}
 	}
-	f.size, f.mtime = size, when
+	f.size, f.mtime, f.ctime = size, when, ctime
+}
+
+// addVoid punches [a, b) out of what lies beneath l.
+func (l *layer) addVoid(a, b uint64) {
+	out := make([]run, 0, len(l.void)+1)
+	placed := false
+	for _, r := range l.void {
+		switch {
+		case r.b < a:
+			out = append(out, r)
+		case r.a > b:
+			if !placed {
+				out, placed = append(out, run{a, b}), true
+			}
+			out = append(out, r)
+		default:
+			a, b = min(a, r.a), max(b, r.b)
+		}
+	}
+	if !placed {
+		out = append(out, run{a, b})
+	}
+	l.void = out
+}
+
+// Punch deallocates [off, off+n) of the file: those bytes read as zero from now on, the
+// size is unchanged, and once settled the range costs no chunk, record or object. A range
+// past the end of the file is clipped to it.
+func (h *File) Punch(ctx context.Context, off, n uint64) error {
+	_, err := h.v.mutate(ctx, func(context.Context) (*change, error) {
+		if h.f.gone {
+			return nil, fs.ErrNotExist
+		}
+		a, b := min(off, h.f.size), min(off+n, h.f.size)
+		if off+n < off { // the range wraps: it reaches the end of the file
+			b = h.f.size
+		}
+		if a >= b {
+			return nil, nil
+		}
+		now := h.v.Now()
+		if h.f.orphan {
+			h.v.punch(h.f, a, b-a, now)
+			return nil, nil
+		}
+		return &change{kind: changePunch, ino: h.f.ino, file: h.f, off: a, size: b - a, when: now, ctime: now}, nil
+	})
+	return err
+}
+
+// punch removes [off, off+n) from the live layer and records it as voided. mu is held.
+func (v *Volume) punch(f *fileState, off, n uint64, when time.Time) {
+	a, b := min(off, f.size), min(off+n, f.size)
+	if off+n < off {
+		b = f.size
+	}
+	if a >= b {
+		return
+	}
+	var kept []span
+	var bytes int64
+	for _, s := range f.lv.dirty {
+		switch {
+		case s.end() <= a || s.off >= b:
+			kept = append(kept, s)
+		default:
+			if s.off < a {
+				kept = append(kept, span{s.off, s.data[: a-s.off : a-s.off]})
+			}
+			if s.end() > b {
+				kept = append(kept, span{b, s.data[b-s.off:]})
+			}
+		}
+	}
+	for _, s := range kept {
+		bytes += int64(len(s.data)) + spanCost
+	}
+	v.account(bytes - f.lv.dirtyN)
+	f.lv.dirty, f.lv.dirtyN = kept, bytes
+	f.lv.addVoid(a, b)
+	f.mtime, f.ctime = when, when
 }
 
 // Sync makes every change the file depends on durable in this node's journal. It does not
@@ -440,20 +556,32 @@ func (v *Volume) truncate(f *fileState, size uint64, when time.Time) {
 // Flush returns.
 func (h *File) Sync(ctx context.Context) error {
 	h.v.mu.RLock()
-	dep := h.f.dep
+	orphan, dep := h.f.orphan, h.f.dep
 	h.v.mu.RUnlock()
+	if orphan {
+		return nil
+	}
 	return h.v.syncTo(ctx, dep)
 }
 
 // Close releases the handle. It makes no request and changes nothing but the count of
 // holders: what the handle wrote is in the Volume's memory and journal whether it is
-// closed or not.
+// closed or not. The last handle of a file that was unlinked takes the file with it.
 func (h *File) Close() error {
 	h.v.mu.Lock()
 	defer h.v.mu.Unlock()
 	h.f.refs--
-	if h.f.refs == 0 && !h.f.unsettled() {
-		delete(h.v.files, h.f.ino)
+	if h.f.refs == 0 {
+		if h.f.orphan {
+			h.v.account(-h.f.lv.dirtyN)
+			h.f.lv = layer{}
+			h.f.changed = false
+			if h.f.fz == nil {
+				delete(h.v.files, h.f.ino)
+			}
+		} else if !h.f.unsettled() {
+			delete(h.v.files, h.f.ino)
+		}
 	}
 	return nil
 }

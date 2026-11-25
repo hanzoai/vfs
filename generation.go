@@ -35,6 +35,7 @@ type generation struct {
 	next  InodeID   // inode numbers handed out at the cut
 	root  ref       // the tree the Head named at the cut
 	bytes int64     // memory of the writes the generation holds
+	ns    counters  // namespace counters at the cut
 
 	mu    sync.Mutex // guards what the workers add
 	known map[chunkID]struct{}
@@ -43,6 +44,7 @@ type generation struct {
 
 	settled bool
 	muts    []mut
+	outNS   counters // counters after settling this generation's files
 	built   bool
 	newRoot ref
 	head    Head
@@ -57,24 +59,27 @@ type snap struct {
 	ext    []extent
 	size   uint64
 	mtime  time.Time
+	ctime  time.Time
 	fz     *layer
 
 	muts      []mut    // the records that make the file what it is now
 	outInline []byte   // the settled content once the generation is published
 	outExt    []extent //
+	oldBytes  uint64   // settled bytes held before this generation
+	newBytes  uint64   // settled bytes held after this generation
 }
 
-// cut makes the generation: everything applied so far, or nil when the Head already has
-// it. mu is held for writing.
+// cut makes the generation: everything applied so far, or nil when a generation is already
+// in flight or when the Head already has everything. mu is held for writing.
 func (v *Volume) cut() *generation {
-	if v.applied == v.head.Journal {
+	if v.gen != nil || v.applied == v.head.Journal {
 		return nil
 	}
-	g := &generation{v: v, seq: v.applied, over: v.over, gone: v.gone, next: v.next, root: v.root}
-	v.over, v.gone, v.logged = newOverlay(), nil, 0
+	g := &generation{v: v, seq: v.applied, over: v.over, gone: v.gone, next: v.next, root: v.root, ns: v.ns}
+	v.over, v.gone, v.goneSet, v.logged = newOverlay(), nil, map[InodeID]struct{}{}, 0
 	for _, f := range v.dirtyFiles {
-		fz := &layer{dirty: f.lv.dirty, dirtyN: f.lv.dirtyN, limit: f.lv.limit}
-		g.snaps = append(g.snaps, &snap{f: f, ino: f.ino, inline: f.inline, ext: f.ext, size: f.size, mtime: f.mtime, fz: fz})
+		fz := &layer{dirty: f.lv.dirty, dirtyN: f.lv.dirtyN, limit: f.lv.limit, void: f.lv.void}
+		g.snaps = append(g.snaps, &snap{f: f, ino: f.ino, inline: f.inline, ext: f.ext, size: f.size, mtime: f.mtime, ctime: f.ctime, fz: fz})
 		g.bytes += fz.dirtyN
 		f.fz = fz
 		f.lv = layer{limit: f.size}
@@ -147,6 +152,9 @@ func (g *generation) reset() {
 // parallel, and the chunks of each across the Volume's workers; the sealed chunks are laid
 // into packs and the packs go to the store as they fill.
 func (g *generation) settle(ctx context.Context, up *uploader) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	pk := &packer{g: g, up: up}
 	files := make(chan struct{}, 2*g.v.cfg.Workers)
 	var (
@@ -217,6 +225,15 @@ func (g *generation) settleFile(ctx context.Context, s *snap, pk *packer) error 
 		return err
 	}
 
+	oldBytes := uint64(len(s.inline))
+	for _, e := range s.ext {
+		oldBytes += uint64(e.n)
+	}
+	newBytes := uint64(len(inline))
+	for _, e := range out {
+		newBytes += uint64(e.n)
+	}
+
 	// Stage only what differs from the settled records.
 	var ms []mut
 	if s.size <= small {
@@ -246,15 +263,20 @@ func (g *generation) settleFile(ctx context.Context, s *snap, pk *packer) error 
 			ms = append(ms, mut{key: keyExtent(s.ino, off), del: true})
 		}
 	}
-	in.Size, in.Mtime, in.Ctime = s.size, s.mtime, s.mtime
+	ct := s.ctime
+	if ct.IsZero() {
+		ct = s.mtime
+	}
+	in.Size, in.Mtime, in.Ctime = s.size, s.mtime, ct
 	ms = append(ms, mut{key: keyInode(s.ino), val: encodeInode(in)})
 	s.muts, s.outInline, s.outExt = ms, inline, out
+	s.oldBytes, s.newBytes = oldBytes, newBytes
 	return nil
 }
 
 // runs returns, in order, the stretches of the file that hold written bytes at the cut:
-// the settled chunks and inline bytes that still count, and the writes. Everything between
-// them is a hole.
+// the settled chunks and inline bytes that still count (less punched voids), and the writes.
+// Everything between them is a hole.
 func (s *snap) runs() []run {
 	var rs []run
 	lim := min(s.size, s.fz.limit)
@@ -263,14 +285,32 @@ func (s *snap) runs() []run {
 			rs = append(rs, run{a, b})
 		}
 	}
+	// settled adds a stretch of the settled content: what was punched out is not in it.
+	settled := func(a, b uint64) {
+		for _, r := range s.fz.void {
+			if r.b <= a {
+				continue
+			}
+			if r.a >= b {
+				break
+			}
+			if r.a > a {
+				add(a, r.a)
+			}
+			if a = max(a, r.b); a >= b {
+				return
+			}
+		}
+		add(a, b)
+	}
 	for _, e := range s.ext {
 		if e.off >= lim {
 			break
 		}
-		add(e.off, min(e.end(), lim))
+		settled(e.off, min(e.end(), lim))
 	}
 	if s.ext == nil {
-		add(0, min(uint64(len(s.inline)), lim))
+		settled(0, min(uint64(len(s.inline)), lim))
 	}
 	for _, d := range s.fz.dirty {
 		add(d.off, d.end())
@@ -283,6 +323,13 @@ func (s *snap) touched(a, b uint64) bool {
 	d := s.fz.dirty
 	i := sort.Search(len(d), func(i int) bool { return d[i].end() > a })
 	return i < len(d) && d[i].off < b
+}
+
+// voided reports whether a punched range overlaps [a, b).
+func (s *snap) voided(a, b uint64) bool {
+	v := s.fz.void
+	i := sort.Search(len(v), func(i int) bool { return v[i].b > a })
+	return i < len(v) && v[i].a < b
 }
 
 // direct returns the n bytes at pos if one write holds them all: a window of the file
@@ -323,7 +370,7 @@ func (g *generation) recut(ctx context.Context, s *snap, b *body, pk *packer) ([
 		// run still ends there.
 		clean := func() bool {
 			e := old[0]
-			if e.end() > lim || s.touched(e.off, e.end()) {
+			if e.end() > lim || s.touched(e.off, e.end()) || s.voided(e.off, e.end()) {
 				return false
 			}
 			endsRun := len(old) == 1 || old[1].off != e.end()
@@ -432,8 +479,12 @@ func (g *generation) collect(ctx context.Context) error {
 			return err
 		}
 	}
+	ns := g.ns
 	for _, s := range g.snaps {
-		ms = append(ms, s.muts...)
+		if len(s.muts) > 0 {
+			ms = append(ms, s.muts...)
+			ns.bytes = ns.bytes - min(ns.bytes, s.oldBytes) + s.newBytes
+		}
 	}
 	ms = append(ms, g.recs...)
 	sort.SliceStable(ms, func(i, j int) bool { return bytes.Compare(ms[i].key, ms[j].key) < 0 })
@@ -445,7 +496,7 @@ func (g *generation) collect(ctx context.Context) error {
 			out = append(out, m)
 		}
 	}
-	g.muts = out
+	g.muts, g.outNS = out, ns
 	return nil
 }
 
@@ -458,6 +509,7 @@ func (g *generation) commit(ctx context.Context) error {
 	v.seq++
 	h := v.head
 	h.Seq, h.Root, h.Next, h.Journal = v.seq, g.newRoot, uint64(g.next), g.seq
+	g.outNS.stamp(&h)
 	err := v.writeHead(ctx, h)
 	if err != nil {
 		if errors.Is(err, ErrStaleRound) {
@@ -496,10 +548,27 @@ func (g *generation) complete() error {
 	for _, s := range g.snaps {
 		f := s.f
 		f.fz = nil
-		if f.gone {
+		_, droppedAfterCut := v.goneSet[s.ino]
+		if f.gone || droppedAfterCut {
+			// The file was dropped after g was cut. Its new tData records are now in v.root;
+			// stage deletions in v.over so v.scan(tData) stays consistent with v.ns.bytes.
+			for _, m := range s.muts {
+				if !m.del && len(m.key) > 0 && m.key[0] == tData {
+					v.over.del(m.key)
+				}
+			}
+			if f.orphan {
+				f.inline, f.ext = s.outInline, s.outExt
+				if f.refs == 0 {
+					delete(v.files, f.ino)
+				}
+			}
 			continue
 		}
 		f.inline, f.ext = s.outInline, s.outExt
+		if len(s.muts) > 0 {
+			v.ns.bytes = v.ns.bytes - min(v.ns.bytes, s.oldBytes) + s.newBytes
+		}
 		if f.refs == 0 && !f.changed {
 			delete(v.files, f.ino)
 		}

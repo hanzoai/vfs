@@ -274,7 +274,8 @@ increasing. It is sealed (4.2) and placed in a fence record.
   the Head includes: what the store holds of it, as the journal's `Published`. It is 0
   when there is no journal. A writer that rewrites the Head and does not publish carries it
   unchanged.
-* `Needs` is a set of feature bits, 0 today. Bit N says that the field of the Tail with tag N
+* `Needs` is a set of feature bits: 0 for a Volume that has never had a hard link, bit 2
+  (`links`) for one that has. Bit N says that the field of the Tail with tag N
   is there and must be understood. A reader MUST refuse a Head whose `Needs` has a bit it
   does not know, and change nothing (`ErrNeeds`). A writer sets a bit only for a feature it
   implements, and writes the field of that tag with it. This is how a change that every
@@ -297,7 +298,8 @@ increasing. It is sealed (4.2) and placed in a fence record.
   it skipped. A field whose bit is not set is ignorable (a hint, a counter nothing depends
   on): it is carried, and never forces a flag day.
 * **Reserved tags and bits.** Tag and bit 1 are `snapshots`, 2 are `links` and 3 are `base`
-  (the table below) and 63 is an escape; tag and bit 0 are not assigned. A reserved bit is unusable until the
+  (the table below) and 63 is an escape; tag and bit 0 are not assigned. `links` is defined
+  (below); the others are not. A reserved bit is unusable until the
   encoding of its field is written in this text: an implementation MUST NOT set a bit, and
   MUST NOT write a field of a tag, whose encoding is not in this text. A build that sets
   `Needs` bit 3 with a field of its own invention writes a Head that another build, which
@@ -310,15 +312,36 @@ increasing. It is sealed (4.2) and placed in a fence record.
   of a bit it knows is set, is `ErrCorrupt`. So a Head is `ErrNeeds` only if its fixed
   fields are sound, and an `ErrCorrupt` Head is one that no build could read.
 
-The bits below are decided and RESERVED: they have names and no encoding, no build sets one,
-and each is named so that two changes do not take the same bit or tag.
+The bits below are decided and RESERVED, except `links`, whose encoding follows the table: the
+others have names and no encoding, no build sets one, and each is named so that two changes do
+not take the same bit or tag.
 
 | Bit and tag | Name | Set when |
 |---|---|---|
 | 1 | `snapshots` | the Volume has retained roots, stored as extension objects (3.1), that a collector must keep: a collector that does not know the bit would delete what they reach, so a build that does not know it refuses the Volume |
-| 2 | `links` | inodes carry link counts that every unlink must adjust (6.1): a writer that does not keep them would leave them wrong |
+| 2 | `links` | inodes carry link counts that every unlink must adjust (6.1): a writer that does not keep them would leave them wrong. Defined below |
 | 3 | `base` | chunks are read through a base layer shared with other Volumes (11.1): the field names the layer, and a shared read key opens its chunks |
 | 63 | (escape) | a Head that needs more than 62 features, or that needs one whose field is not a tag: this text will say how, and until it does the bit is unusable, as the others are |
+
+**The `links` field** (bit and tag 2). Its value is one unsigned integer (uvarint), the number
+of inodes whose link count is above one at the commit that wrote it. The commit that makes any
+inode's link count exceed one sets bit 2 and writes the field, and so does every later commit of
+that Volume: the bit is never cleared, even when the count falls to 0. A Volume that has never had
+a hard link has neither, and a build that does not know the bit reads it. A writer MUST keep the
+count equal to the inodes of the tree that have a link count field (6.1) at every Head it writes,
+and the link count of every non-directory inode MUST be the number of directory entries that name
+it. A reader that knows the bit MUST refuse (`ErrCorrupt`) a value that is not one integer in its
+shortest form with nothing after it.
+
+**The `usage` field** (tag 64, no bit). A field of tag 64 and above is never needed (above), and
+this one is a hint that a commit keeps current: two unsigned integers (uvarints), the number of
+inodes in the tree (the root, files, directories, symbolic links, pipes and sockets) and the number
+of bytes stored for files and symbolic links, which is the sum of the lengths of the inline
+records and of the extents (7.1): a hole costs nothing, a chunk that two extents share counts for
+each. A Head without the field describes a Volume of the root directory and nothing else. A writer
+that does not know the field carries it unchanged and so lets it go stale, which is why it is a
+hint; a reader that knows it MUST refuse (`ErrCorrupt`) a value that is not those two integers in
+their shortest form with nothing after them.
 
 **The size of the Head.** The `head` object (the fence record of 5.2: 30 bytes of header
 and the sealed Head) is at most 65,536 bytes. A reader MUST refuse a longer one, and a writer
@@ -463,7 +486,21 @@ root directory is inode 1. Inode numbers are assigned in increasing order from
 no `/` and no NUL, and is not `.` or `..`.
 
 An inode's fields: tag 1 mode (uvarint, a 32-bit value, below), 2 size in bytes
-(uvarint), 3 mtime, 4 atime, 5 ctime (varint, nanoseconds since the Unix epoch). Tags 1 to 5 MUST be present. The length of an extent (the table above) and the type bits of a directory entry are 32-bit values too (section 1). A reader MUST check the fields it
+(uvarint), 3 mtime, 4 atime, 5 ctime (varint, nanoseconds since the Unix epoch). Tags 1 to 5 MUST be present.
+The optional fields are these, and a record has one only when what it says differs from what
+its absence says:
+
+| Tag | Field | Value | Absent means |
+|---|---|---|---|
+| 6 | owner | user, uvarint, 32 bits | the inode belongs to whoever runs the mount (a Volume does not know who) |
+| 7 | group | group, uvarint, 32 bits | the same: tags 6 and 7 are both there or both absent, and a record with one is `ErrCorrupt` |
+| 8 | link count | uvarint, at least 2, 32 bits | the inode has one name. Not on a directory. Critical: the `links` bit announces it (5.1) |
+| 9 | parent | uvarint, the inode that names this directory | the root has none; any other directory MUST have one, and it is never the inode itself and never 0. Only on a directory |
+
+A directory's link count is not stored: it is 2 and one more for each subdirectory, which a reader
+counts from the entries of the directory (an entry whose type bits say directory). A reader MUST
+refuse (`ErrCorrupt`) a link count of 0 or 1 written as a field, one on a directory, and a parent
+on anything but a directory or equal to 0 or to the inode: a record has one spelling. The length of an extent (the table above) and the type bits of a directory entry are 32-bit values too (section 1). A reader MUST check the fields it
 knows, MUST reject tags that are not strictly ascending, MUST keep the bytes of fields
 it does not know and write them back unchanged when it rewrites the inode, and MUST
 NOT fail on them. A new attribute is a new tag. A new kind of record is a new first
@@ -487,7 +524,15 @@ A regular file has none of the type bits (19, 21, 24 to 27, 31). The type bits o
 mode are the ones listed (19, 21, 24, 25, 26, 27, 31), and a directory entry (6.1)
 records those only. A writer MUST NOT set a bit this table does not list; a reader
 MUST keep bits it does not understand when it rewrites an inode and MUST NOT act on
-them. The reference implementation sets bit 31 and the permissions today and no other.
+them. The reference implementation sets the permissions, the setuid, setgid and sticky bits
+(23, 22 and 20), and the type bits of a directory (31), a symbolic link (27), a named pipe (25)
+and a socket (24); it makes no device and no irregular file. The setuid and setgid bits mean
+what they mean to POSIX only for a mount that enforces them; a Volume stores them.
+
+A symbolic link is an inode with bit 27 and the permissions 0777 whose size is the length of its
+target and whose target is the bytes of its inline record (`03 ino`, 7.1), at most 4,095 and at
+least 1 byte with no NUL; the Volume never interprets the bytes. A named pipe and a socket are
+inodes with their type bit and no data record.
 
 Fields are optional by default: a reader that does not know one keeps it and ignores
 its meaning. A field that some writer must maintain for the Volume to stay consistent
@@ -534,6 +579,71 @@ The last node of a level ends there whatever the entries. If a level yields one 
 that node is the root; otherwise its nodes become the entries of the next level up
 (first key, ref). The empty tree has no shard and root ref of 32 zero bytes.
 
+### 6.4 The namespace
+
+The entries (`02 dir name`) and the inodes make a namespace, and these rules hold in every tree
+a writer commits. A Volume checks no permission: who may do what to which inode is the
+mount's, and a mount asks the kernel to decide it from the mode, the owner and the group.
+
+* **Names.** Every directory but the root has exactly one name, in the directory its parent
+  field names. A non-directory inode has one or more, and exactly as many as its link count
+  (one if it has no link count field). An entry's type bits are those of the inode it names.
+  No inode but the root is without a name, except one that a handle holds open after its last
+  name was removed (below), which is in no tree. A name that is longer than 255 bytes
+  is refused with `ErrNameTooLong`; an inode has at most 65,000 names (`ErrTooManyLinks`).
+* **Times.** The operations below set the times of what they change to the Volume's clock at
+  the moment of the change. An entry made, removed or renamed in a directory sets that
+  directory's modification time and change time (this is what a tool that caches the
+  contents of a directory by its modification time relies on); an inode whose link count or
+  parent changes, or that is renamed, has its change time set; a write, a truncation and
+  a punch set the modification time and the change time of the file; an attribute change sets
+  the change time and, where it sets a time, that time exactly, to the nanosecond. Reading
+  sets no time: the access time is the one the inode was made with or given.
+* **Rename** names the inode of an old entry with a new name in one step: the Head that names
+  the tree holds the old entry and not the new one, or the new and not the old, and the same for
+  every other effect of the rename (the replaced inode, the link counts, the parents' times).
+  A crash, or an error, at any point leaves the tree whole as it was. If the new name is the
+  name of the same inode, nothing happens and the call succeeds, including when the two are
+  two names of one inode. Otherwise an existing new name is replaced when the inodes are both
+  directories and the new one is empty, or neither is a directory, and the replaced inode loses
+  that name as `unlink` does; a directory over a file is `ErrNotDir`, a file over a directory
+  `ErrIsDir`, a directory over one that has entries `ErrNotEmpty`. A directory moves with
+  everything below it by changing its entry and its parent field alone. A directory cannot move
+  into itself or below itself (`fs.ErrInvalid`), which a writer finds by following parent fields
+  up from the new directory to the root. The precedence of these answers is: the flags, the old
+  name is not there, the new name is not there under exchange, the new name exists under
+  no-replace, the same inode (which succeeds), the directory loop, the types, the new
+  directory's entries. Two flags are honoured, as renameat2(2) defines them:
+  no-replace refuses an existing new name (`fs.ErrExist`), and exchange swaps two names that
+  both exist (`fs.ErrNotExist` otherwise), each inode taking the other's place, with the same
+  loop rule for a directory in either place. The two flags together, or any other, are
+  `fs.ErrInvalid`.
+* **Link** adds a name for a non-directory inode (`fs.ErrPermission` for a directory) in a
+  directory where the name does not exist, raises the link count by one, sets the inode's
+  change time, and, the first time any link count exceeds one, announces `links` in the Head
+  of the commit (5.1). An inode that was removed while open cannot be linked (`fs.ErrNotExist`).
+  A link to a symbolic link names the link itself.
+* **Remove** takes one name of a non-directory away, or the name of an empty directory (`ErrNotEmpty`
+  otherwise). A non-directory with other names keeps them and its link count falls by one. One
+  with no other name is deleted with its data records, unless a handle holds it open.
+* **Unlink while open.** A handle that holds an inode open when its last name is removed keeps
+  the inode: reads, writes, truncation, punching, the change of attributes and fstat go on
+  working through the handle, with a link count of 0, and none of it reaches the tree, which
+  holds nothing of the inode from the commit after the removal on. The last close of the
+  handle ends it. A process that dies with the handle open leaves nothing: the inode was never
+  in a Head after its removal. The inode number is not reused (6.1).
+* **Attributes.** A change of the permission, setuid, setgid and sticky bits, the owner and
+  group (both at once), the access and modification times, or the size of a regular file
+  (7.1) is one call and sets the change time. A new inode takes the group of its directory
+  when the directory has the setgid bit, and a new directory also takes the bit.
+* **An operation that fails changes nothing.** Every operation reads what it needs before it
+  changes anything, so an error, a failed read of the store included, leaves the Volume as it
+  was and a later commit holds nothing of the call.
+* **Usage and capacity.** A writer keeps the `usage` field (5.1) at every commit, and
+  `Config.Capacity` bounds it: a write that would take the bytes stored and the bytes written but
+  not yet stored past the capacity is refused with `ErrNoSpace`; an overwrite of bytes that are
+  there is not.
+
 ## 7. Files
 
 ### 7.1 Small files, extents and holes
@@ -548,7 +658,10 @@ record, no chunk and no object, however large. Bytes at or beyond the size do no
 exist: a read there returns end of file, and a file made larger by truncation reads
 zero in the new range. Truncating a file smaller discards extents past the new size
 and shortens the one that crosses it; extending it afterwards MUST read zero, never the
-discarded bytes.
+discarded bytes. A range of a file can also be punched out (deallocated): its bytes read as
+zero, the size does not change, and, once committed, no extent covers it, so it costs nothing
+and the file's chunks are cut again around it as around any hole (7.2); a write into it is a
+write. A range that reaches past the end of the file is clipped to it.
 
 ### 7.2 Cutting chunks
 
@@ -593,8 +706,8 @@ and the last the Head carries (published, the Head's `Journal` field).
 
 | Call | Durable when it returns |
 |---|---|
-| write, truncate, create, make directory, remove | nothing: applied in memory and appended to the journal. Visible to every reader at once |
-| fsync of a file | the journal, for every change the file depends on (its writes, truncates, and the change that created it). Concurrent callers share one sync. The store is not asked |
+| write, truncate, punch, create, make directory, remove, rename, link, symbolic link, make pipe or socket, set attributes | nothing: applied in memory and appended to the journal. Visible to every reader at once. Each operation is atomic in a generation: a Head holds all of it or none |
+| fsync of a file | the journal, for every change the file depends on (its writes, truncates, punches, and the change that created it). Concurrent callers share one sync. The store is not asked |
 | fsync of a directory, or of a Volume | the journal, for every change made before the call |
 | close of a file handle | nothing, and no request of the store |
 | flush on a mount (every `close(2)`) | nothing, and no request of the store; constant time |
@@ -702,6 +815,9 @@ Acceptance criteria, each testable from outside a store and a clock the test mov
 | `head` object (fence record: 30 bytes and the sealed Head) | 65,536 bytes, read and written |
 | Head Tail | at most 256 fields |
 | name | 1 to 255 bytes, no `/`, no NUL, not `.` or `..` |
+| symbolic link target | 1 to 4,095 bytes, no NUL |
+| names of one inode | 65,000 |
+| directories nested | no bound but a rename that must follow parents up stops at 65,536 levels (`ErrCorrupt`) |
 | prefix | at most 512 bytes, segments as in section 2 |
 | round | 1 to 2^64-2 for a writer |
 | fence retries | at most 8 compare-and-set attempts per Put or Claim |
@@ -735,14 +851,18 @@ reference implementation (all in the repository root unless a package is named):
 | bounded reads | `TestHeadBound`, `TestShardBound`, `TestBackendBodyIsBounded`, `TestReadIsBounded` |
 | prefixes | `TestValidPrefix`, `TestPrefixConfinement` |
 | durability and interrupts on a mount | `TestFUSEFsyncSurvivesKill`, `TestFUSEInterruptsAreNotErrors`, `TestFsyncWaitsForItsCommit`, `TestCloseWaitsForItsCommit`, `TestReadWaitsForItsData`, `TestLookupIsNotAnsweredEINTR`, `TestAttrIsNotAnsweredEINTR`, `TestReaddirIsNotAnsweredEINTR`, `TestMkdirIsNotAnsweredEINTR`, `TestRemoveIsNotAnsweredEINTR`, `TestCreateIsNotAnsweredEINTR`, `TestEveryHandlerOutlivesItsRequest`, `TestFsyncCallersShareTwoCommits`, `TestFsyncJoinsAFlightThatCoversIt`, `TestKilledColdLookupIsFreedAfterTheGrace`, `TestErrnoMapping`, `TestFinishCommitsWhatTheMountWrote` (the flush at the end of a mount), `TestFinishDoesNotWaitForAStalledCommitForever`, `TestFinishDoesNotClaimALostCommitIsLost`, `TestFinishReportsTheLostCommitEvenWhenServeFailed`, `TestFinishWaitsForASlowCommit`, `TestFUSETermStopsAMountInUse`, `TestFUSEReadsExistingFilesOverS3`, and `TestFUSESQLite` (`internal/sqlitecheck`) on a Linux kernel |
+| the namespace: rename and its flags, loops, replacement, hard links, symbolic links, pipes and sockets, attributes, times, unlink while open | `TestRenameMovesAFile`, `TestRenameTimes`, `TestRenameReplaces`, `TestRenameOfTwoNamesOfOneInodeIsNothing`, `TestRenameFlags`, `TestRenameDirectoryNeverBecomesItsOwnAncestor`, `TestRenameOverAHardLinkKeepsTheOtherName`, `TestRenameOverAnOpenFile`, `TestDirectoryLinkCounts`, `TestHardLinks`, `TestSymlinks`, `TestMknod`, `TestSetAttr`, `TestOwnerAndGroupInheritance`, `TestDirectoryTimesFollowTheirEntries`, `TestUnlinkedFileIsWholeForItsHandle`, `TestUnlinkedFileWithAnotherNameStaysNamed`, `TestRemovedFileStaysOpenForItsHandle`, `TestNameLimits`, `TestReadOnlyVolumeRefusesEveryNewOperation` |
+| an operation is all or nothing; a rename is atomic across a crash; a link count never lies | `TestAnOperationThatFailsChangesNothing` (the store's nth read fails, for every n), `TestFailureAtEveryWrite` and `TestSigkill` (the states they move between hold renames, links and symbolic links, and every state read back is checked by `Volume.Check`), `TestModelPosix` and `TestModelPosixMany` (random operations against a plain model of a tree: names, inode numbers, types, modes, owners, link counts, bytes and times, across Flush, reopen and takeover) |
+| the `links` and `usage` fields, the inode's owner, link count and parent | `TestSpecInodeAttributes`, `TestSpecLinksAndUsageFields`, `TestHeadAnnouncesLinksOnlyAfterTheFirstLink`, `TestLinksFieldIsHeldToItsBit`, `TestUsageFieldIsCheckedWhenRead`, `TestTailSetKeepsEveryOtherFieldInOrder`, `TestUsage`, `TestCapacity`, `TestHeadNeeds` |
+| punched holes | `TestPunchedRangeCostsNothing`, and the punch step of `TestModelPosix` |
+| the mount on a kernel: rename, links, attributes, unlink while open, fallocate, statfs, locks, mmap, pipes and sockets, `.` and `..` | `TestFUSERename`, `TestFUSELinks`, `TestFUSEAttributes`, `TestFUSEUnlinkWhileOpen`, `TestFUSEFallocate`, `TestFUSEStatfs`, `TestFUSELocks`, `TestFUSEMmap`, `TestFUSESpecialFiles`, `TestFUSEReaddirDots` |
 | full-size randomised runs | `TestSparseExact`, `TestSparseRandom`, `TestSparseCanonicalRuns`, `TestSparseTinyBounds` (the `sparse` gate, not `-short`) |
 
 ## 11. Not specified, and known limits
 
-Rename, links, symbolic links, owner and mode changes, extended attributes, locks and
-file-system statistics have no records yet; a mount answers them "not supported". There
-is no garbage collection of unreferenced objects (11.1 says how it will be done), no
-quota or usage accounting, and no snapshot or clone. Retries and back-off are the
+Extended attributes and device nodes have no records; a mount answers them "not supported".
+There is no garbage collection of unreferenced objects (11.1 says how it will be done), no
+quota beyond the capacity of 6.4, and no snapshot or clone. Retries and back-off are the
 caller's. Sealed sizes depend on the Cipher.
 
 ### 11.1 Collection (decided, not built)
@@ -829,12 +949,21 @@ Known limits of the reference implementation. None changes the layout.
   nothing, and a generation holds every change of the last few seconds, so a tree of many
   small files costs a fraction of an object per file (measured 0.15 objects per file for 82,000
   files of 1 to 16 KiB).
-* **Not built:** rename, hard links, symbolic links, chmod, chown, utimens, extended
-  attributes, statfs, and a read of a file that was unlinked while open. `git`, editors that
-  save by renaming, `tar` and `npm` fail on them. A read of an unlinked open file answers
-  ENOENT on a 6.8 kernel and EIO on a 7.0 one, as each kernel reads the answer to its
-  attribute request that the inode is gone.
-* **No quota, no usage accounting, no collection.** A Volume only grows (11.1).
+* **What the mount cannot do, because of the FUSE library it is built on** (the library has
+  neither request, and the engine is complete without them):
+  * the flags of `renameat2(2)` are answered `EINVAL` by the kernel (the Volume honours them:
+    6.4); a plain rename is whole;
+  * `O_TMPFILE` is answered `EOPNOTSUPP`; a program that wants an unnamed file falls back to
+    a named one that it removes, which an open handle survives (6.4);
+  * the sticky bit is stored and returned by the Volume, but the library leaves it out of the
+    attributes it answers the kernel with, so `stat` on a mount never shows it;
+  * extended attributes (`user.*`, `security.*`, ACLs) are answered `ENOTSUP`, and a device node is
+    refused with `EPERM`;
+  * advisory locks, `flock` and `fcntl`, are the kernel's own, per mount and in memory: they
+    exclude the processes of one mount and nothing else, and are gone with the mount.
+* **Usage is a hint, capacity is a bound on a count.** The `usage` field (5.1) is as current as
+  the writers that kept it; the capacity refuses a write on the bytes this Volume knows of. There
+  is no collection, and a Volume only grows (11.1).
 * **Tenants must not hold the store's write credentials.** The Round in the fence header
   is not authenticated: it is checked against the recorded Round by conditional writes, not
   by the Cipher, and whoever can write the store can set it, as they can delete the Head.
@@ -854,3 +983,65 @@ Known limits of the reference implementation. None changes the layout.
   stop the writer first.
 * The `replica/` package keeps a SQLite replica current by a ticker; it is not part
   of this layout and is not specified.
+
+## 12. Specification notes: the POSIX operations
+
+What a third party needs to implement the operations of 6.4 and to test the implementation. Each
+criterion is stated so that a program can check it; the test that does it for the reference
+implementation is named in section 10. HIP-1342 (the draft HIP for this layout) is the home of
+these notes.
+
+**Layout.**
+
+1. An inode record carries the owner (tag 6) and the group (tag 7) together or not at all, a link
+   count (tag 8, at least 2, only on a non-directory) and a parent (tag 9, only on a directory
+   other than the root, never 0 and never itself); the encodings are those of 6.1, in ascending
+   tag order, each integer in its shortest form. A decoder rejects every other spelling.
+2. The mode bits are the ones of 6.1: setuid 23, setgid 22, sticky 20, symbolic link 27, directory
+   31, named pipe 25, socket 24. A directory entry records the type bits of its inode.
+3. A symbolic link's target is the inline data record of its inode; its size is the target's
+   length.
+4. The `links` field (tag 2, bit 2) is one uvarint: the number of inodes whose link count is above
+   one. It is set by the commit that first makes one, and never cleared. A Volume without a hard
+   link has a Head that a build that does not know bit 2 reads; one with a hard link is refused by
+   that build (`ErrNeeds`) and read by a build that knows the bit.
+5. The `usage` field (tag 64) is two uvarints, inodes and bytes stored. After a commit of a
+   Volume that only builds that keep the field have written, its values are the counts of the
+   tree: the number of inode records, and the sum of the lengths of the inline records and the
+   extents.
+
+**Behaviour.** For each, "the answer" is the error named, and "nothing" means that the tree, the
+counters and every inode are as they were.
+
+6. Rename of a name to a name of the same inode answers nothing. Rename over a file removes the
+   replaced inode's name; if that was its last name and no handle holds it, the inode and its
+   data are gone from the next commit.
+7. Rename of a directory below itself, or into itself, answers `ErrInvalid` and does nothing;
+   so does an exchange that would put either directory below the other.
+8. A rename is atomic: for every point at which a writer may be stopped or a request may fail
+   (every write to the store, every read), what a reader opening the Volume then sees is the tree
+   before the rename or the tree after it, entry for entry, inode for inode, link count for link
+   count.
+9. After any sequence of operations and a commit, the link count of every non-directory inode is
+   the number of entries that name it; every directory has one entry, whose directory is the
+   parent field; the count of a directory is 2 and its subdirectories; the usage and links fields
+   are the counts of the tree.
+10. An entry made, removed or renamed in a directory moves that directory's modification time and
+    change time forward; a write to a file inside does not. A chmod moves the file's change time and
+    not its modification time. A time that is set is read back to the nanosecond, across a commit
+    and a reopen.
+11. A handle on an inode whose last name is removed reads what it held and writes, truncates and
+    stats (with a link count of 0) until its close; the next commit and a reopen show no such
+    inode; Link of it answers `fs.ErrNotExist`.
+12. Punching a range reads as zero over it and leaves the size; committing it stores no chunk for
+    it and lowers the bytes stored by the extents it covered; a write into it is read back.
+13. A change of owner needs both halves for an inode that has none (`ErrInvalid`); a new inode in a
+    directory with the setgid bit has the directory's group, and a new directory the bit too.
+14. A write past `Config.Capacity` answers `ErrNoSpace` and does nothing; an overwrite of existing
+    bytes is allowed at the capacity; truncation to zero makes room.
+15. A mount made with `default_permissions` shows the mode, owner, group and link count of each
+    inode in `stat(2)`, and the kernel, not the Volume, refuses what the mode does not allow.
+
+**References.** POSIX.1-2017 `rename`, `link`, `symlink`, `unlink`, `rmdir`, `utimensat`,
+`fchmod`, `fchown`, `ftruncate`, `statvfs`; Linux `renameat2(2)`, `fallocate(2)`, `flock(2)`,
+`fcntl(2)` open file description locks, `fuse(4)` with `default_permissions`.

@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"sync"
@@ -89,13 +90,22 @@ func newServer(vol *vfs.Volume) *server {
 	return &server{vol: vol, next: 1, handles: map[fuseops.HandleID]*vfs.File{}}
 }
 
+// attrs is the kernel's view of an inode. An inode with no owner of its own belongs to
+// whoever runs the mount.
 func attrs(in vfs.Inode) fuseops.InodeAttributes {
+	uid, gid := uint32(os.Getuid()), uint32(os.Getgid())
+	if in.Owned {
+		uid, gid = in.UID, in.GID
+	}
 	return fuseops.InodeAttributes{
-		Size: in.Size, Nlink: 1, Mode: os.FileMode(in.Mode),
+		Size: in.Size, Nlink: in.Nlink, Mode: os.FileMode(in.Mode),
 		Atime: in.Atime, Mtime: in.Mtime, Ctime: in.Ctime, Crtime: in.Ctime,
-		Uid: uint32(os.Getuid()), Gid: uint32(os.Getgid()),
+		Uid: uid, Gid: gid,
 	}
 }
+
+// creator is who made the request, as the owner of what it creates.
+func creator(c fuseops.OpContext) vfs.Option { return vfs.Owner(c.Uid, uint32(os.Getgid())) }
 
 func entry(in vfs.Inode) fuseops.ChildInodeEntry {
 	exp := time.Now().Add(time.Second)
@@ -128,18 +138,33 @@ func (s *server) GetInodeAttributes(ctx context.Context, op *fuseops.GetInodeAtt
 	return nil
 }
 
+// SetInodeAttributes changes the mode, the owner, the times and the size.
 func (s *server) SetInodeAttributes(ctx context.Context, op *fuseops.SetInodeAttributesOp) error {
 	ctx = context.WithoutCancel(ctx) // no request is answered EINTR: see errno.go
-	// Only the size can be set; the rest would succeed without changing anything.
-	if op.Mode != nil || op.Atime != nil || op.Mtime != nil {
-		return unsupported
+	c := vfs.Change{Size: op.Size, Atime: op.Atime, Mtime: op.Mtime}
+	if op.Mode != nil {
+		m := fs.FileMode(*op.Mode)
+		c.Mode = &m
 	}
-	if op.Size != nil {
-		if err := s.vol.Truncate(ctx, vfs.InodeID(op.Inode), *op.Size); err != nil {
+	if op.Uid != nil || op.Gid != nil {
+		// An owner is a pair; one half of it that the request leaves out is the inode's.
+		cur, err := s.vol.Stat(ctx, vfs.InodeID(op.Inode))
+		if err != nil {
 			return errno(err)
 		}
+		uid, gid := cur.UID, cur.GID
+		if !cur.Owned {
+			uid, gid = uint32(os.Getuid()), uint32(os.Getgid())
+		}
+		if op.Uid != nil {
+			uid = *op.Uid
+		}
+		if op.Gid != nil {
+			gid = *op.Gid
+		}
+		c.UID, c.GID = &uid, &gid
 	}
-	in, err := s.vol.Stat(ctx, vfs.InodeID(op.Inode))
+	in, err := s.vol.SetAttr(ctx, vfs.InodeID(op.Inode), c)
 	if err != nil {
 		return errno(err)
 	}
@@ -150,7 +175,7 @@ func (s *server) SetInodeAttributes(ctx context.Context, op *fuseops.SetInodeAtt
 
 func (s *server) MkDir(ctx context.Context, op *fuseops.MkDirOp) error {
 	ctx = context.WithoutCancel(ctx) // no request is answered EINTR: see errno.go
-	in, err := s.vol.Mkdir(ctx, vfs.InodeID(op.Parent), op.Name, op.Mode.Perm())
+	in, err := s.vol.Mkdir(ctx, vfs.InodeID(op.Parent), op.Name, op.Mode, creator(op.OpContext))
 	if err != nil {
 		return errno(err)
 	}
@@ -160,7 +185,7 @@ func (s *server) MkDir(ctx context.Context, op *fuseops.MkDirOp) error {
 
 func (s *server) CreateFile(ctx context.Context, op *fuseops.CreateFileOp) error {
 	ctx = context.WithoutCancel(ctx) // no request is answered EINTR: see errno.go
-	in, err := s.vol.Create(ctx, vfs.InodeID(op.Parent), op.Name, op.Mode.Perm())
+	in, err := s.vol.Create(ctx, vfs.InodeID(op.Parent), op.Name, op.Mode, creator(op.OpContext))
 	if err != nil {
 		return errno(err)
 	}
@@ -170,6 +195,51 @@ func (s *server) CreateFile(ctx context.Context, op *fuseops.CreateFileOp) error
 	}
 	op.Entry = entry(in)
 	op.Handle = s.add(f)
+	return nil
+}
+
+// Rename moves an entry, atomically. The flags of renameat2 are not delivered.
+func (s *server) Rename(ctx context.Context, op *fuseops.RenameOp) error {
+	ctx = context.WithoutCancel(ctx) // no request is answered EINTR: see errno.go
+	return errno(s.vol.Rename(ctx, vfs.InodeID(op.OldParent), op.OldName, vfs.InodeID(op.NewParent), op.NewName, 0))
+}
+
+// CreateLink names an inode a second time.
+func (s *server) CreateLink(ctx context.Context, op *fuseops.CreateLinkOp) error {
+	ctx = context.WithoutCancel(ctx) // no request is answered EINTR: see errno.go
+	in, err := s.vol.Link(ctx, vfs.InodeID(op.Target), vfs.InodeID(op.Parent), op.Name)
+	if err != nil {
+		return errno(err)
+	}
+	op.Entry = entry(in)
+	return nil
+}
+
+func (s *server) CreateSymlink(ctx context.Context, op *fuseops.CreateSymlinkOp) error {
+	ctx = context.WithoutCancel(ctx) // no request is answered EINTR: see errno.go
+	in, err := s.vol.Symlink(ctx, vfs.InodeID(op.Parent), op.Name, op.Target, creator(op.OpContext))
+	if err != nil {
+		return errno(err)
+	}
+	op.Entry = entry(in)
+	return nil
+}
+
+func (s *server) ReadSymlink(ctx context.Context, op *fuseops.ReadSymlinkOp) error {
+	ctx = context.WithoutCancel(ctx) // no request is answered EINTR: see errno.go
+	target, err := s.vol.Readlink(ctx, vfs.InodeID(op.Inode))
+	op.Target = target
+	return errno(err)
+}
+
+// MkNode makes a regular file, a named pipe or a socket. A device is refused.
+func (s *server) MkNode(ctx context.Context, op *fuseops.MkNodeOp) error {
+	ctx = context.WithoutCancel(ctx) // no request is answered EINTR: see errno.go
+	in, err := s.vol.Mknod(ctx, vfs.InodeID(op.Parent), op.Name, op.Mode, creator(op.OpContext))
+	if err != nil {
+		return errno(err)
+	}
+	op.Entry = entry(in)
 	return nil
 }
 
@@ -226,8 +296,15 @@ func (s *server) ReadDir(ctx context.Context, op *fuseops.ReadDirOp) error {
 			continue
 		}
 		typ := fuseutil.DT_File
-		if e.Mode.IsDir() {
+		switch {
+		case e.Mode.IsDir():
 			typ = fuseutil.DT_Directory
+		case e.Mode&fs.ModeSymlink != 0:
+			typ = fuseutil.DT_Link
+		case e.Mode&fs.ModeNamedPipe != 0:
+			typ = fuseutil.DT_FIFO
+		case e.Mode&fs.ModeSocket != 0:
+			typ = fuseutil.DT_Socket
 		}
 		n := fuseutil.WriteDirent(op.Dst[op.BytesRead:], fuseutil.Dirent{
 			Offset: fuseops.DirOffset(i + 1), Inode: fuseops.InodeID(e.ID), Name: e.Name, Type: typ,
@@ -299,12 +376,10 @@ func (s *server) ReleaseFileHandle(_ context.Context, op *fuseops.ReleaseFileHan
 }
 
 func (s *server) StatFS(_ context.Context, op *fuseops.StatFSOp) error {
-	op.BlockSize = blockSize
-	// The store has no capacity to run out of: report about a pebibyte free.
-	op.Blocks = 1 << 38
-	op.BlocksFree = 1 << 38
-	op.BlocksAvailable = 1 << 38
-	op.IoSize = blockSize
+	u := statfs(s.vol.Usage())
+	op.BlockSize, op.IoSize = blockSize, blockSize
+	op.Blocks, op.BlocksFree, op.BlocksAvailable = u.blocks, u.free, u.free
+	op.Inodes, op.InodesFree = u.files, u.ffree
 	return nil
 }
 

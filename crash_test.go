@@ -104,10 +104,12 @@ func TestFailureAtEveryWrite(t *testing.T) {
 				t.Fatalf("%s write %d: Flush = %v, want the injected error", want, nth, err)
 			}
 			sameSnapshot(t, fmt.Sprintf("failure at %s write %d", want, nth), snapshot(t, reopen(t, mem, c)), one)
+			check(t, reopen(t, mem, c)) // names, link counts, parents and usage agree: a link count never lies
 
 			// The Volume kept its changes: a retry commits them.
 			flush(t, v)
 			sameSnapshot(t, fmt.Sprintf("retry after %s write %d", want, nth), snapshot(t, reopen(t, mem, c)), two)
+			check(t, reopen(t, mem, c))
 		}
 	}
 	if total < 4 {
