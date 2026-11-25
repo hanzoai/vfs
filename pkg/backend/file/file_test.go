@@ -171,6 +171,10 @@ func TestFileOfADirectoryNotYetThere(t *testing.T) {
 	if err := os.Mkdir(real, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	resolved, err := filepath.EvalSymlinks(real)
+	if err != nil {
+		t.Fatal(err)
+	}
 	link := filepath.Join(base, "link")
 	if err := os.Symlink(real, link); err != nil {
 		t.Fatal(err)
@@ -183,7 +187,7 @@ func TestFileOfADirectoryNotYetThere(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if a.String() != b.String() || a.String() != "file://"+filepath.ToSlash(filepath.Join(real, "x", "y")) {
+	if a.String() != b.String() || a.String() != "file://"+filepath.ToSlash(filepath.Join(resolved, "x", "y")) {
 		t.Fatalf("places %q and %q", a.String(), b.String())
 	}
 }

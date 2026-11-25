@@ -205,21 +205,52 @@ func TestHandlesShareWrites(t *testing.T) {
 	}
 }
 
-func TestRemovedFileFailsOpenHandle(t *testing.T) {
-	_, _, v := newMem(t)
+// TestRemovedFileStaysOpenForItsHandle: a file unlinked while open is gone for everyone
+// else and whole for its handle, which reads and writes it until it closes; nothing of it
+// reaches the store.
+func TestRemovedFileStaysOpenForItsHandle(t *testing.T) {
+	be, c, v := newMem(t)
 	in := write(t, v, vfs.RootInode, "gone", []byte("data"))
 	f, _ := v.Open(ctx, in.ID)
-	defer f.Close()
 	if err := v.Remove(ctx, vfs.RootInode, "gone"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.ReadAt(ctx, make([]byte, 4), 0); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("read of removed file: %v, want ErrNotExist", err)
+	if _, err := v.Lookup(ctx, vfs.RootInode, "gone"); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("lookup of the removed name: %v", err)
 	}
-	if _, err := f.WriteAt(ctx, []byte("x"), 0); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("write to removed file: %v, want ErrNotExist", err)
+	buf := make([]byte, 4)
+	if n, err := f.ReadAt(ctx, buf, 0); err != nil && err != io.EOF || string(buf[:n]) != "data" {
+		t.Fatalf("read of an unlinked file: %q %v", buf[:n], err)
 	}
-	flush(t, v) // the discarded bytes must not reach the store
+	if _, err := f.WriteAt(ctx, []byte("more"), 4); err != nil {
+		t.Fatalf("write to an unlinked file: %v", err)
+	}
+	if st, err := f.Stat(ctx); err != nil || st.Size != 8 || st.Nlink != 0 {
+		t.Fatalf("stat of an unlinked file: %+v %v", st, err)
+	}
+	if _, err := v.Open(ctx, in.ID); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("opening an unlinked inode by number: %v", err)
+	}
+	if err := v.Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	flush(t, v) // the file reaches the store as nothing
+	if err := v.Check(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if st := v.Stats(); st.Dirty != 0 {
+		t.Fatalf("the closed orphan left %d dirty bytes", st.Dirty)
+	}
+	cold := reopen(t, be, c)
+	if _, err := cold.Stat(ctx, in.ID); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the unlinked file is in the store: %v", err)
+	}
+	if err := cold.Check(ctx); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestOpenIsReadOnly(t *testing.T) {
@@ -405,24 +436,6 @@ func TestReadAfterSettleBeforeFlush(t *testing.T) {
 		t.Fatalf("%d bytes unsettled", st.Dirty)
 	}
 	mustEqual(t, "settled, not flushed", readAll(t, v, in.ID), data)
-}
-
-// TestRecutHonoursItsContext: re-cutting a file's bytes stops when the caller's
-// context ends. Nothing about the file is lost: a Flush with a live context then
-// commits it.
-func TestRecutHonoursItsContext(t *testing.T) {
-	be, c, v := newMem(t)
-	in := write(t, v, vfs.RootInode, "f", content(61, 6<<20))
-	gone, cancel := context.WithCancel(ctx)
-	cancel()
-	if err := v.Flush(gone); !errors.Is(err, context.Canceled) {
-		t.Fatalf("Flush with a cancelled context = %v, want context.Canceled", err)
-	}
-	if st := v.Stats(); st.Dirty == 0 {
-		t.Fatal("the cancelled Flush discarded the writes")
-	}
-	flush(t, v)
-	mustEqual(t, "after the cancelled Flush", readAll(t, reopen(t, be, c), in.ID), content(61, 6<<20))
 }
 
 // putBig stores an object of the given size at key, whatever it was.

@@ -104,10 +104,12 @@ func TestFailureAtEveryWrite(t *testing.T) {
 				t.Fatalf("%s write %d: Flush = %v, want the injected error", want, nth, err)
 			}
 			sameSnapshot(t, fmt.Sprintf("failure at %s write %d", want, nth), snapshot(t, reopen(t, mem, c)), one)
+			check(t, reopen(t, mem, c)) // names, link counts, parents and usage agree: a link count never lies
 
 			// The Volume kept its changes: a retry commits them.
 			flush(t, v)
 			sameSnapshot(t, fmt.Sprintf("retry after %s write %d", want, nth), snapshot(t, reopen(t, mem, c)), two)
+			check(t, reopen(t, mem, c))
 		}
 	}
 	if total < 4 {
@@ -117,12 +119,18 @@ func TestFailureAtEveryWrite(t *testing.T) {
 }
 
 // TestLostAcknowledgementOfHead: the Head write lands but its reply is lost. The
-// caller sees an error, the store holds the new state whole, and a retry is safe.
+// publisher reads the Head, finds its own generation in it, and counts it as published:
+// the caller's Flush returns nil, the store holds the new state whole, and nothing is
+// written twice, now or on a later Flush.
 func TestLostAcknowledgementOfHead(t *testing.T) {
 	_, two := expected(t)
 	mem := storetest.NewMem()
 	var lose atomic.Bool
+	var heads atomic.Int64
 	hook := &storetest.Hook{Backend: mem, After: func(op, key string) error {
+		if key == "head" {
+			heads.Add(1)
+		}
 		if lose.Load() && key == "head" {
 			return errors.New("reply lost")
 		}
@@ -140,13 +148,20 @@ func TestLostAcknowledgementOfHead(t *testing.T) {
 	flush(t, v)
 	stateTwo(t, v)
 	lose.Store(true)
-	if err := v.Flush(ctx); err == nil {
-		t.Fatal("Flush hid a lost reply")
+	before := heads.Load()
+	if err := v.Flush(ctx); err != nil {
+		t.Fatalf("Flush after a Head whose reply was lost, and which landed: %v", err)
+	}
+	if n := heads.Load() - before; n != 1 {
+		t.Fatalf("%d Head writes for one generation", n)
 	}
 	sameSnapshot(t, "head landed", snapshot(t, reopen(t, mem, c)), two)
 	lose.Store(false)
-	flush(t, v) // the retry is a no-op or a re-commit of the same tree
-	sameSnapshot(t, "after retry", snapshot(t, reopen(t, mem, c)), two)
+	flush(t, v) // nothing is left to publish
+	if n := heads.Load() - before; n != 1 {
+		t.Fatalf("a Flush with nothing to publish wrote the Head again (%d writes)", n)
+	}
+	sameSnapshot(t, "after the next Flush", snapshot(t, reopen(t, mem, c)), two)
 }
 
 // crashChild is the process the crash test kills. It is the test binary run

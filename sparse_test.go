@@ -55,7 +55,9 @@ func TestSmallWritesAmplifyMemory(t *testing.T) {
 	if testing.Short() {
 		t.Skip("a measurement: the scale step runs it without the race detector")
 	}
-	_, _, v := newMem(t)
+	// Nothing is published while the writes are made: the bound is an hour and the journal and memory
+	// are large, so that the heap is the spans' and what a publication would cache is not.
+	_, _, v, _ := pair(t, nil, func(c *vfs.Config) { c.Bound, c.Dirty, c.JournalCapacity = time.Hour, 8<<30, 2<<30 })
 	in, err := v.Create(ctx, vfs.RootInode, "sieve", 0o644)
 	if err != nil {
 		t.Fatal(err)
@@ -436,7 +438,8 @@ func TestSparsePetabyte(t *testing.T) {
 	if took > 5*time.Second {
 		t.Fatalf("truncate + 4 writes + Flush of a 1 PiB file took %v", took)
 	}
-	if puts["meta"] > 6 || puts["pack"] > 2 || puts["head"] != 1 {
+	// One generation, or two when the bound or the journal started one before the Flush.
+	if puts["meta"] > 12 || puts["pack"] > 2 || puts["head"] < 1 || puts["head"] > 2 {
 		t.Fatalf("a 1 PiB file with %d extents wrote %d shards, %d packs, %d heads", len(spots), puts["meta"], puts["pack"], puts["head"])
 	}
 	if shardBytes > 64<<10 {

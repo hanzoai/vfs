@@ -26,7 +26,7 @@ func extVolume(t *testing.T) (*storetest.Mem, Cipher, *Volume) {
 	if err := Create(ctx, Config{Backend: be, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	v, err := Attach(ctx, Config{Backend: be, Cipher: c, Round: 1})
+	v, err := Attach(ctx, Config{Backend: be, Cipher: c, Round: 1, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -118,17 +118,17 @@ func TestExtNamesFollowTheVolume(t *testing.T) {
 	if n2, _ := v.ExtKey("trace", []byte("wf")); n2 != name {
 		t.Fatal("a commit moved the name")
 	}
-	w, err := Attach(ctx, Config{Backend: be, Cipher: c, Round: 3})
+	w, err := Attach(ctx, Config{Backend: be, Cipher: c, Round: 3, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n2, _ := w.ExtKey("trace", []byte("wf")); n2 != name {
 		t.Fatal("a takeover moved the name")
 	}
-	if err := Reseal(ctx, Config{Backend: be, Cipher: c, Round: 4}, ""); err != nil {
+	if err := Reseal(ctx, Config{Backend: be, Cipher: c, Round: 4, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk}, ""); err != nil {
 		t.Fatal(err)
 	}
-	if err := Reseal(ctx, Config{Backend: be, Cipher: c, Round: 5}, be.String()); err != nil {
+	if err := Reseal(ctx, Config{Backend: be, Cipher: c, Round: 5, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk}, be.String()); err != nil {
 		t.Fatal(err)
 	}
 	r, err := Open(ctx, Config{Backend: be, Cipher: c})

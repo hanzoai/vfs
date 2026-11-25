@@ -17,7 +17,7 @@ import (
 func TestCreateOfAnExistingFileOpensIt(t *testing.T) {
 	_, v, _, _ := testVolume(t)
 	bg := context.Background()
-	root := newSession(bg, v).node(1, 1)
+	root := newSession(bg, v).node(1)
 	create := func(name string, flags int) (*handle, error) {
 		_, h, err := root.Create(bg, &fuse.CreateRequest{Name: name, Mode: 0o644, Flags: fuse.OpenFlags(flags)}, &fuse.CreateResponse{})
 		if err != nil {
@@ -63,7 +63,7 @@ func TestCreateOfAnExistingFileOpensIt(t *testing.T) {
 func TestCreateOfANameBeingRemoved(t *testing.T) {
 	_, v, _, _ := testVolume(t)
 	bg := context.Background()
-	root := newSession(bg, v).node(1, 1)
+	root := newSession(bg, v).node(1)
 	stop := make(chan struct{})
 	done := make(chan struct{})
 	go func() {

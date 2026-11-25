@@ -138,7 +138,8 @@ the last committed tree, whole, and a retry commits the next.
 | A model of the whole API, many seeds | pass | `TestModelFuzz`, `TestModelFuzzMany` (300 seeds): random operations against a plain filesystem, with Flush, reopen and takeover; the memory bound is asserted |
 | SQLite on the Volume | pass | `TestSQLiteRoundTrip`; over the mount `TestFUSESQLite` (100 rows survive release and remount, `integrity_check` ok) |
 | The mount: Lookup, ReadDir (with `.` and `..`), Mkdir, Create, Remove, Setattr size, Read, Write, Flush, Fsync, Release | pass | `TestFUSEPOSIX`, `TestFUSESemantics`, `TestFUSEHostileNames`, `TestFUSEConcurrentSameFile`, `TestFUSEUnlinkVersusRmdir`; after `fsync(2)` a second read-only view of the store sees the file |
-| The mount says what it cannot do | pass | `TestFUSEUnsupportedIsHonest`: rename, symlink, hard link, chmod and utimens answer ENOSYS (the kernel words link as EPERM), a file too large is EFBIG |
+| The mount says what it cannot do | pass | `TestFUSESpecialFiles`: extended attributes answer ENOTSUP, `O_TMPFILE` EOPNOTSUPP, a device node EPERM; `TestFUSERename`: the flags of `renameat2` EINVAL; a file too large is EFBIG |
+| Rename, hard links, symbolic links, attributes, times, unlink while open, fallocate, statfs, locks, mmap, pipes and sockets | pass | `TestFUSERename`, `TestFUSELinks`, `TestFUSEAttributes`, `TestFUSEUnlinkWhileOpen`, `TestFUSEFallocate`, `TestFUSEStatfs`, `TestFUSELocks`, `TestFUSEMmap`, `TestFUSESpecialFiles`, `TestFUSEReaddirDots`; the engine side is `TestModelPosix` against a plain model, and the crash sweeps over states that hold renames and links |
 | A signal reaching a caller is never an `EIO` or an `EINTR`, and never cancels a commit or a fetch | pass | `TestInterruptIsEINTR`, `TestFsyncWaitsForItsCommit` (the caller is interrupted mid-PUT of the Head; it waits and gets the commit's result), `TestCloseWaitsForItsCommit`, `TestReadWaitsForItsData`, `TestLookupIsNotAnsweredEINTR`, `TestAttrIsNotAnsweredEINTR`, `TestReaddirIsNotAnsweredEINTR`, `TestMkdirIsNotAnsweredEINTR`, `TestRemoveIsNotAnsweredEINTR`, `TestCreateIsNotAnsweredEINTR`, `TestEveryHandlerOutlivesItsRequest`, and through a kernel mount `TestFUSEInterruptsAreNotErrors`: 2,000 fsync+close and 8 GiB of reads, with SIGURG sent to the waiting threads thousands of times a second, zero failures |
 
 Mount tests run only with `-tags fuse`, from a child process that serves the mount
@@ -183,6 +184,18 @@ Linux host, and they are part of releasing:
 > `./sqlitecheck.test -test.count=1`, with `s3` of `tools/ci/s3server.sh` on `PATH`. Every
 > round passes. `TestFUSEInterruptsAreNotErrors` fails only for a call that failed, never
 > for how long the host took.
+>
+> The tools that a coding agent runs, on a mount and on tmpfs, give the same results: with the
+> Volume mounted at `$MNT` (`vfs mount`, key on standard input) and `$ORIGIN` a bare repository,
+> `tools/ci/gitwork.sh $MNT/work $ORIGIN` and the same on a tmpfs directory print the same tree
+> hashes, file counts, modes, sizes and content hash; and after an `npm ci` or a `pnpm install`
+> of one lock file, `tools/ci/treehash.sh node_modules facts` gives one hash on both (pnpm's own
+> `.modules.yaml` and `.pnpm-workspace-state-v1.json` name the store and the time, and differ).
+> `go build` and `cargo check` run with their source, caches and outputs on the mount, and a
+> second run finds everything built. `git update-index --test-untracked-cache` answers OK.
+> `pjdfstest` (rename, link, symlink, chmod, chown, truncate, unlink, rmdir, mkdir, open,
+> utimensat) fails on the mount only where it fails on tmpfs under the same user
+> namespace: both lack the second user it switches to.
 >
 > `TMPDIR` is a directory the binary can create files in, made in the same session that runs the
 > binary. `/dev/shm` is faster than a disk but is not safe to prepare ahead: on a host whose
@@ -332,9 +345,10 @@ the list; `go run ./tools/mutate -j 5` runs it. The list has 252 mutations and e
 
 Plain statements of fact; each is its own change.
 
-* POSIX operations beyond the ones above: rename, symlink, hard link,
-  chmod/chown/utimens, statfs, xattr, locks, unlink-while-open (handles of a removed
-  file fail). The mount answers the missing ones ENOSYS.
+* Extended attributes, device nodes, `O_TMPFILE`, the flags of `renameat2` and the sticky
+  bit's appearance in `stat` on a mount: the FUSE library has no request for the first four
+  and drops the last (SPECIFICATION 11.2). Everything else of POSIX that a coding agent's
+  tools use is there (SPECIFICATION 6.4).
 * The Volume's lock is held across the store calls of a commit, so a slow or stalled
   store stalls every call on that Volume, `Stat` included (`TestStalledCommitHonoursItsDeadline`:
   a caller's deadline ends its own call, and a `Stat` waited 2.0 s behind the stalled
@@ -372,7 +386,7 @@ Plain statements of fact; each is its own change.
   chunks, about 171 MiB of packs for about 2 MiB of data, and a first Flush of 12.7 s
   (`TestTinyExtentsCost`). The cost follows the number of extents, not the size of the
   file. Packing tiny extents inline is not built.
-* `statfs` answers zeros.
+* `statfs` reports the Volume's own usage; it is exact after a commit (SPECIFICATION 5.1).
 
 ## Running the tests
 
