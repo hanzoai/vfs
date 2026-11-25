@@ -1684,17 +1684,43 @@ func (e *Engine) flushComponentExclusiveLocked(ctx context.Context, comp []Inode
 	currMap := make(map[InodeID]*dirSnap, len(comp)+4)
 	var maxExistingSeq uint64
 
-	expanded := make(map[InodeID]bool, len(comp))
-	for _, did := range comp {
-		expanded[did] = true
-		idx := stripeIndex(did)
-		if bd := e.stripes[idx].jBase[did]; bd != nil && bd.parent != 0 {
-			expanded[bd.parent] = true
+	// Compute the full transitive closure over BOTH entanglement edges (entAdj)
+	// and parent pointers of any born/removed/moved directory. Closing over
+	// entAdj after every parent expansion guarantees a cross-directory rename,
+	// mkdir, or rmdir component is never split across journal batches.
+	e.metaMu.Lock()
+	expanded := make(map[InodeID]bool, len(comp)+4)
+	queue := make([]InodeID, 0, len(comp)+4)
+	enqueue := func(did InodeID) {
+		if did == 0 || expanded[did] {
+			return
 		}
-		if cd := e.stripes[idx].dirs[did]; cd != nil && cd.parent != 0 {
-			expanded[cd.parent] = true
+		expanded[did] = true
+		queue = append(queue, did)
+	}
+	for _, did := range comp {
+		enqueue(did)
+	}
+	for len(queue) > 0 {
+		did := queue[0]
+		queue = queue[1:]
+		for nb := range e.entAdj[did] {
+			enqueue(nb)
+		}
+		idx := stripeIndex(did)
+		bd := e.stripes[idx].jBase[did]
+		cd := e.stripes[idx].dirs[did]
+		if bd == nil || cd == nil || bd.parent != cd.parent || bd.name != cd.name {
+			if bd != nil && bd.parent != 0 {
+				enqueue(bd.parent)
+			}
+			if cd != nil && cd.parent != 0 {
+				enqueue(cd.parent)
+			}
 		}
 	}
+	e.metaMu.Unlock()
+
 	allIDs := make([]InodeID, 0, len(expanded))
 	for did := range expanded {
 		allIDs = append(allIDs, did)
@@ -1845,14 +1871,30 @@ func (e *Engine) Publish(ctx context.Context) error {
 		return nil
 	}
 	expanded := make(map[InodeID]bool, len(e.dirtyP)+4)
-	for did := range e.dirtyP {
-		expanded[did] = true
-		idx := stripeIndex(did)
-		if pb := e.stripes[idx].pBase[did]; pb != nil && pb.parent != 0 {
-			expanded[pb.parent] = true
+	queue := make([]InodeID, 0, len(e.dirtyP)+4)
+	enqueueP := func(did InodeID) {
+		if did == 0 || expanded[did] {
+			return
 		}
-		if cd := e.stripes[idx].dirs[did]; cd != nil && cd.parent != 0 {
-			expanded[cd.parent] = true
+		expanded[did] = true
+		queue = append(queue, did)
+	}
+	for did := range e.dirtyP {
+		enqueueP(did)
+	}
+	for len(queue) > 0 {
+		did := queue[0]
+		queue = queue[1:]
+		idx := stripeIndex(did)
+		pb := e.stripes[idx].pBase[did]
+		cd := e.stripes[idx].dirs[did]
+		if pb == nil || cd == nil || pb.parent != cd.parent || pb.name != cd.name {
+			if pb != nil && pb.parent != 0 {
+				enqueueP(pb.parent)
+			}
+			if cd != nil && cd.parent != 0 {
+				enqueueP(cd.parent)
+			}
 		}
 	}
 	e.metaMu.Unlock()
@@ -1915,7 +1957,7 @@ func (e *Engine) Publish(ctx context.Context) error {
 			delete(e.stripes[idx].pBase, did)
 		}
 		cd := e.stripes[idx].dirs[did]
-		if cd == nil || cd.lastModSeq <= pubMaxSeq {
+		if (cd == nil && currMap[did] == nil) || (cd != nil && cd.lastModSeq <= pubMaxSeq) {
 			e.metaMu.Lock()
 			delete(e.dirtyP, did)
 			e.metaMu.Unlock()

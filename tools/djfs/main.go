@@ -2,16 +2,15 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Command djfs evaluates DJFS directory-granularity metadata mutation
-// coalescing against uncoalesced Volume commits and plain local disk I/O
-// across npm-ci, MDTest, scratch cancellation, atomic WriteTmp+Rename,
-// Varmail fsync, and negative-control workloads (HIP-1345).
+// coalescing against current journaled VFS v2 under the same durability
+// contract across npm-ci extraction, scratch cancellation, atomic
+// WriteTmp+Rename, and matched-durability Varmail Sync latency (HIP-1345).
 package main
 
 import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -24,20 +23,21 @@ import (
 
 	"github.com/hanzoai/vfs"
 	"github.com/hanzoai/vfs/internal/storetest"
-	"github.com/hanzoai/vfs/journal"
 	"github.com/hanzoai/vfs/pkg/djfs"
 )
 
 type cliVolumeTarget struct {
-	mu    sync.Mutex
-	v     *vfs.Volume
-	idMap map[djfs.InodeID]vfs.InodeID
+	mu       sync.Mutex
+	v        *vfs.Volume
+	syncOnly bool
+	idMap    map[djfs.InodeID]vfs.InodeID
 }
 
-func newCLIVolumeTarget(v *vfs.Volume) *cliVolumeTarget {
+func newCLIVolumeTarget(v *vfs.Volume, syncOnly bool) *cliVolumeTarget {
 	return &cliVolumeTarget{
-		v:     v,
-		idMap: map[djfs.InodeID]vfs.InodeID{djfs.RootInode: vfs.RootInode},
+		v:        v,
+		syncOnly: syncOnly,
+		idMap:    map[djfs.InodeID]vfs.InodeID{djfs.RootInode: vfs.RootInode},
 	}
 }
 
@@ -95,6 +95,11 @@ func (vt *cliVolumeTarget) ApplyBatch(ctx context.Context, batch djfs.Batch) err
 				return err
 			}
 
+		case djfs.DeltaRename:
+			if err := vt.v.Rename(ctx, vt.idMap[op.Dir], op.Name, vt.idMap[op.DstDir], op.DstName, 0); err != nil {
+				return err
+			}
+
 		case djfs.DeltaUnlink, djfs.DeltaRmdir:
 			if err := vt.v.Remove(ctx, vt.idMap[op.Dir], op.Name); err != nil {
 				return err
@@ -104,56 +109,34 @@ func (vt *cliVolumeTarget) ApplyBatch(ctx context.Context, batch djfs.Batch) err
 			}
 		}
 	}
+	if vt.syncOnly {
+		return vt.v.Sync(ctx)
+	}
 	return vt.v.Flush(ctx)
 }
 
 type report struct {
-	Packages          int     `json:"packages"`
-	FilesPerPackage   int     `json:"files_per_package"`
-	NpmSurvivingFiles int     `json:"npm_surviving_files"`
-	NpmRawOps         uint64  `json:"npm_raw_ops"`
-	NpmPublishedOps   uint64  `json:"npm_published_ops"`
-	NpmS3Puts         int     `json:"npm_s3_puts"`
-	NpmPutsPerFile    float64 `json:"npm_puts_per_file"`
-	ClosePutsPerFile  float64 `json:"close_puts_per_file"`
-	ScratchRawOps     uint64  `json:"scratch_raw_ops"`
-	ScratchJournalOps uint64  `json:"scratch_journal_ops"`
-	AtomicRawOps      uint64  `json:"atomic_raw_ops"`
-	AtomicJournalOps  uint64  `json:"atomic_journal_ops"`
-	DJFSFsyncP50Us    float64 `json:"djfs_fsync_p50_us"`
-	DJFSFsyncP99Us    float64 `json:"djfs_fsync_p99_us"`
-	PlainFsyncP50Us   float64 `json:"plain_fsync_p50_us"`
-	PlainFsyncP99Us   float64 `json:"plain_fsync_p99_us"`
-}
-
-func openLocalJournal(baseDir string) (*journal.Journal, string, error) {
-	jDir := filepath.Join(baseDir, "journal")
-	opt := journal.Options{
-		Capacity: 16 << 20,
-		Segment:  4 << 20,
-		Lineage:  []byte("tools-djfs-eval"),
-	}
-	j, err := journal.Open(jDir, opt)
-	if err == nil {
-		return j, "", nil
-	}
-	if !errors.Is(err, journal.ErrVolatile) {
-		return nil, "", err
-	}
-	wd, err := os.Getwd()
-	if err != nil {
-		return nil, "", err
-	}
-	alt, err := os.MkdirTemp(wd, ".djfs-cli-")
-	if err != nil {
-		return nil, "", err
-	}
-	j, err = journal.Open(alt, opt)
-	if err != nil {
-		_ = os.RemoveAll(alt)
-		return nil, "", err
-	}
-	return j, alt, nil
+	Packages            int     `json:"packages"`
+	FilesPerPackage     int     `json:"files_per_package"`
+	NpmSurvivingFiles   int     `json:"npm_surviving_files"`
+	V2DirectJournalRecs uint64  `json:"v2_direct_journal_recs"`
+	V2DirectS3Puts      int     `json:"v2_direct_s3_puts"`
+	V2DirectPutsPerFile float64 `json:"v2_direct_puts_per_file"`
+	V2DirectDurationMs  float64 `json:"v2_direct_duration_ms"`
+	DJFSJournalRecs     uint64  `json:"djfs_journal_recs"`
+	DJFSRawOps          uint64  `json:"djfs_raw_ops"`
+	DJFSPublishedOps    uint64  `json:"djfs_published_ops"`
+	DJFSS3Puts          int     `json:"djfs_s3_puts"`
+	DJFSPutsPerFile     float64 `json:"djfs_puts_per_file"`
+	DJFSDurationMs      float64 `json:"djfs_duration_ms"`
+	ScratchRawOps       uint64  `json:"scratch_raw_ops"`
+	ScratchJournalOps   uint64  `json:"scratch_journal_ops"`
+	AtomicRawOps        uint64  `json:"atomic_raw_ops"`
+	AtomicJournalOps    uint64  `json:"atomic_journal_ops"`
+	V2NativeSyncP50Us   float64 `json:"v2_native_sync_p50_us"`
+	V2NativeSyncP99Us   float64 `json:"v2_native_sync_p99_us"`
+	DJFSOverV2SyncP50Us float64 `json:"djfs_over_v2_sync_p50_us"`
+	DJFSOverV2SyncP99Us float64 `json:"djfs_over_v2_sync_p99_us"`
 }
 
 func percentileUs(samples []time.Duration, q float64) float64 {
@@ -169,90 +152,109 @@ func percentileUs(samples []time.Duration, q float64) float64 {
 	return float64(sorted[idx].Nanoseconds()) / 1000.0
 }
 
+func attachCLI(ctx context.Context, mem *storetest.Mem, ciph vfs.Cipher, jdir string) (*vfs.Volume, error) {
+	if err := vfs.Create(ctx, vfs.Config{Backend: mem, Cipher: ciph}); err != nil {
+		return nil, err
+	}
+	return vfs.Attach(ctx, vfs.Config{
+		Backend:         mem,
+		Cipher:          ciph,
+		Round:           1,
+		Journal:         jdir,
+		JournalCapacity: 128 << 20,
+		Bound:           time.Hour,
+		Disk:            storetest.Disk,
+	})
+}
+
 func main() {
-	pkgs := flag.Int("pkgs", 100, "number of npm-ci packages")
-	perPkg := flag.Int("files-per-pkg", 100, "surviving files per package")
+	pkgs := flag.Int("pkgs", 25, "number of npm-ci packages")
+	perPkg := flag.Int("files-per-pkg", 40, "surviving files per package")
 	asJSON := flag.Bool("json", false, "emit JSON report")
 	flag.Parse()
 
 	ctx := context.Background()
-	workDir, err := os.MkdirTemp("", "djfs-eval-*")
+	jRoot, err := os.MkdirTemp(storetest.Journals(), "djfs-cli-*")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "mkdirtemp: %v\n", err)
 		os.Exit(1)
 	}
-	defer os.RemoveAll(workDir)
+	defer os.RemoveAll(jRoot)
+
+	key, err := age.GenerateHybridIdentity()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "age key: %v\n", err)
+		os.Exit(1)
+	}
+	ciph := vfs.Hybrid(key)
 
 	var rep report
 	rep.Packages = *pkgs
 	rep.FilesPerPackage = *perPkg
-	nPkgs := *pkgs
-	nPerPkg := *perPkg
-	rep.NpmSurvivingFiles = nPkgs * nPerPkg
+	rep.NpmSurvivingFiles = *pkgs * *perPkg
 
-	// 1. Measure uncoalesced Flush-per-close baseline on live vfs.Volume (100 files).
+	// 1. Matched-durability baseline: current VFS v2 Volume directly (disk journal + epoch Flush).
 	{
 		mem := storetest.NewMem()
-		key, err := age.GenerateHybridIdentity()
+		vol, err := attachCLI(ctx, mem, ciph, filepath.Join(jRoot, "v2-direct"))
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "age key: %v\n", err)
+			fmt.Fprintf(os.Stderr, "v2 direct attach: %v\n", err)
 			os.Exit(1)
 		}
-		ciph := vfs.Hybrid(key)
-		if err := vfs.Create(ctx, vfs.Config{Backend: mem, Cipher: ciph}); err != nil {
-			fmt.Fprintf(os.Stderr, "vfs create: %v\n", err)
-			os.Exit(1)
-		}
-		vol, err := vfs.Attach(ctx, vfs.Config{Backend: mem, Cipher: ciph, Round: 1})
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "vfs attach: %v\n", err)
-			os.Exit(1)
-		}
-		d, err := vol.Mkdir(ctx, vfs.RootInode, "pkg", 0o755)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "vfs mkdir: %v\n", err)
-			os.Exit(1)
-		}
-		_ = vol.Flush(ctx)
 		mem.Reset()
+		t0 := time.Now()
+		stg, _ := vol.Mkdir(ctx, vfs.RootInode, ".staging", 0o700)
+		for p := 0; p < *pkgs; p++ {
+			pd, _ := vol.Mkdir(ctx, vfs.RootInode, fmt.Sprintf("pkg-%04d", p), 0o755)
+			lockName := fmt.Sprintf(".lock-%04d", p)
+			lk, _ := vol.Create(ctx, stg.ID, lockName, 0o600)
+			lf, _ := vol.Open(ctx, lk.ID)
+			_, _ = lf.WriteAt(ctx, []byte("lock"), 0)
+			_ = lf.Close()
+			_ = vol.Remove(ctx, stg.ID, lockName)
 
-		const sampleCloseFiles = 100
-		body := bytes.Repeat([]byte("x"), 20<<10)
-		for i := 0; i < sampleCloseFiles; i++ {
-			in, err := vol.Create(ctx, d.ID, fmt.Sprintf("f_%03d.js", i), 0o644)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "vfs create file: %v\n", err)
-				os.Exit(1)
+			for f := 0; f < *perPkg; f++ {
+				tmp := fmt.Sprintf("t_%04d_%03d.tmp", p, f)
+				dst := fmt.Sprintf("f_%03d.js", f)
+				sz := 512 + ((p*29 + f*13) % 1536)
+				if f == 0 && p%8 == 0 {
+					sz = 20 << 10
+				}
+				payload := bytes.Repeat([]byte("j"), sz)
+				in, _ := vol.Create(ctx, stg.ID, tmp, 0o644)
+				fh, _ := vol.Open(ctx, in.ID)
+				_, _ = fh.WriteAt(ctx, payload, 0)
+				_ = fh.Close()
+				_ = vol.Rename(ctx, stg.ID, tmp, pd.ID, dst, 0)
 			}
-			f, err := vol.Open(ctx, in.ID)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "vfs open: %v\n", err)
-				os.Exit(1)
-			}
-			_, _ = f.WriteAt(ctx, body, 0)
-			_ = f.Close()
-			_ = vol.Flush(ctx)
 		}
-		rep.ClosePutsPerFile = float64(mem.Total()) / float64(sampleCloseFiles)
+		_ = vol.Remove(ctx, vfs.RootInode, ".staging")
+		if err := vol.Flush(ctx); err != nil {
+			fmt.Fprintf(os.Stderr, "v2 direct flush: %v\n", err)
+			os.Exit(1)
+		}
+		rep.V2DirectDurationMs = float64(time.Since(t0).Microseconds()) / 1000.0
+		rep.V2DirectJournalRecs = vol.State().Published
+		rep.V2DirectS3Puts = mem.Total()
+		rep.V2DirectPutsPerFile = float64(rep.V2DirectS3Puts) / float64(rep.NpmSurvivingFiles)
 		_ = vol.Close()
 	}
 
-	// 2. Measure DJFS coalesced npm-ci extraction onto live vfs.Volume.
+	// 2. Coalesced: DJFS reusing VFS v2 native journal + epoch Flush under identical durability contract.
 	{
 		mem := storetest.NewMem()
-		key, _ := age.GenerateHybridIdentity()
-		ciph := vfs.Hybrid(key)
-		_ = vfs.Create(ctx, vfs.Config{Backend: mem, Cipher: ciph})
-		vol, _ := vfs.Attach(ctx, vfs.Config{Backend: mem, Cipher: ciph, Round: 1})
+		vol, err := attachCLI(ctx, mem, ciph, filepath.Join(jRoot, "djfs-v2"))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "djfs v2 attach: %v\n", err)
+			os.Exit(1)
+		}
 		mem.Reset()
-
-		target := newCLIVolumeTarget(vol)
 		eng, _ := djfs.New(djfs.Config{
-			Target:        target,
+			Target:        newCLIVolumeTarget(vol, false),
 			MaxDirtyOps:   1 << 22,
 			MaxDirtyBytes: 512 << 20,
 		})
-
+		t0 := time.Now()
 		stg, _ := eng.Mkdir(ctx, djfs.RootInode, ".staging", 0o700)
 		for p := 0; p < *pkgs; p++ {
 			pd, _ := eng.Mkdir(ctx, djfs.RootInode, fmt.Sprintf("pkg-%04d", p), 0o755)
@@ -263,9 +265,7 @@ func main() {
 			for f := 0; f < *perPkg; f++ {
 				tmp := fmt.Sprintf("t_%04d_%03d.tmp", p, f)
 				dst := fmt.Sprintf("f_%03d.js", f)
-				mix := p*29 + f*13
-				rem := mix % 1536
-				sz := 512 + rem
+				sz := 512 + ((p*29 + f*13) % 1536)
 				if f == 0 && p%8 == 0 {
 					sz = 20 << 10
 				}
@@ -277,18 +277,20 @@ func main() {
 		}
 		_ = eng.Rmdir(ctx, djfs.RootInode, ".staging")
 		if err := eng.Publish(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "publish: %v\n", err)
+			fmt.Fprintf(os.Stderr, "djfs publish: %v\n", err)
 			os.Exit(1)
 		}
+		rep.DJFSDurationMs = float64(time.Since(t0).Microseconds()) / 1000.0
 		st := eng.Stats()
-		rep.NpmRawOps = st.RawOps
-		rep.NpmPublishedOps = st.PublishedOps
-		rep.NpmS3Puts = mem.Total()
-		rep.NpmPutsPerFile = float64(rep.NpmS3Puts) / float64(rep.NpmSurvivingFiles)
+		rep.DJFSJournalRecs = vol.State().Published
+		rep.DJFSRawOps = st.RawOps
+		rep.DJFSPublishedOps = st.PublishedOps
+		rep.DJFSS3Puts = mem.Total()
+		rep.DJFSPutsPerFile = float64(rep.DJFSS3Puts) / float64(rep.NpmSurvivingFiles)
 		_ = vol.Close()
 	}
 
-	// 3. Scratch Create+Unlink & Atomic WriteTmp+Rename storms.
+	// 3. Scratch Create+Unlink & Atomic WriteTmp+Rename coalescing counts.
 	{
 		eng, _ := djfs.New(djfs.Config{MaxDirtyOps: 1 << 22, MaxDirtyBytes: 512 << 20})
 		d, _ := eng.Mkdir(ctx, djfs.RootInode, "scratch", 0o755)
@@ -317,64 +319,58 @@ func main() {
 		rep.AtomicJournalOps = b2.JournalOps - b1.JournalOps
 	}
 
-	// 4. Local disk Fsync latency: DJFS + journal.Journal vs plain OS file + dir Sync.
+	// 4. Matched-durability local Sync latency: VFS v2 native Sync vs DJFS over VFS v2 native Sync.
 	{
-		j, altCleanup, err := openLocalJournal(workDir)
+		payload := bytes.Repeat([]byte("m"), 4096)
+		const rounds = 100
+
+		mem1 := storetest.NewMem()
+		v1, err := attachCLI(ctx, mem1, ciph, filepath.Join(jRoot, "sync-v2"))
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "open journal: %v\n", err)
+			fmt.Fprintf(os.Stderr, "sync-v2 attach: %v\n", err)
 			os.Exit(1)
 		}
-		if altCleanup != "" {
-			defer os.RemoveAll(altCleanup)
+		d1, _ := v1.Mkdir(ctx, vfs.RootInode, "mail", 0o755)
+		_ = v1.Sync(ctx)
+		v2Lat := make([]time.Duration, 0, rounds)
+		for i := 0; i < rounds; i++ {
+			tmp := fmt.Sprintf("tmp_%d", i)
+			cur := fmt.Sprintf("cur_%d", i)
+			t0 := time.Now()
+			in, _ := v1.Create(ctx, d1.ID, tmp, 0o600)
+			fh, _ := v1.Open(ctx, in.ID)
+			_, _ = fh.WriteAt(ctx, payload, 0)
+			_ = fh.Close()
+			_ = v1.Rename(ctx, d1.ID, tmp, d1.ID, cur, 0)
+			_ = v1.Sync(ctx)
+			v2Lat = append(v2Lat, time.Since(t0))
 		}
-		defer j.Close()
+		rep.V2NativeSyncP50Us = percentileUs(v2Lat, 0.50)
+		rep.V2NativeSyncP99Us = percentileUs(v2Lat, 0.99)
+		_ = v1.Close()
 
-		eng, _ := djfs.New(djfs.Config{Journal: j})
-		d, _ := eng.Mkdir(ctx, djfs.RootInode, "mail", 0o755)
-		_ = eng.FsyncDir(ctx, d.ID)
-
-		payload := bytes.Repeat([]byte("m"), 4096)
-		const rounds = 200
+		mem2 := storetest.NewMem()
+		v2, err := attachCLI(ctx, mem2, ciph, filepath.Join(jRoot, "sync-djfs"))
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sync-djfs attach: %v\n", err)
+			os.Exit(1)
+		}
+		eng, _ := djfs.New(djfs.Config{Target: newCLIVolumeTarget(v2, true)})
+		d2, _ := eng.Mkdir(ctx, djfs.RootInode, "mail", 0o755)
+		_ = eng.Publish(ctx)
 		djfsLat := make([]time.Duration, 0, rounds)
 		for i := 0; i < rounds; i++ {
 			tmp := fmt.Sprintf("tmp_%d", i)
 			cur := fmt.Sprintf("cur_%d", i)
 			t0 := time.Now()
-			_, _ = eng.Create(ctx, d.ID, tmp, 0o600, payload)
-			_ = eng.Rename(ctx, d.ID, tmp, d.ID, cur)
-			if err := eng.FsyncDir(ctx, d.ID); err != nil {
-				fmt.Fprintf(os.Stderr, "djfs fsync: %v\n", err)
-				os.Exit(1)
-			}
+			_, _ = eng.Create(ctx, d2.ID, tmp, 0o600, payload)
+			_ = eng.Rename(ctx, d2.ID, tmp, d2.ID, cur)
+			_ = eng.Publish(ctx)
 			djfsLat = append(djfsLat, time.Since(t0))
 		}
-		rep.DJFSFsyncP50Us = percentileUs(djfsLat, 0.50)
-		rep.DJFSFsyncP99Us = percentileUs(djfsLat, 0.99)
-
-		plainDir := filepath.Join(workDir, "plain-fsync")
-		_ = os.MkdirAll(plainDir, 0o755)
-		plainLat := make([]time.Duration, 0, rounds)
-		for i := 0; i < rounds; i++ {
-			sp := filepath.Join(plainDir, fmt.Sprintf("tmp_%d", i))
-			dp := filepath.Join(plainDir, fmt.Sprintf("cur_%d", i))
-			t0 := time.Now()
-			f, err := os.OpenFile(sp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "plain open: %v\n", err)
-				os.Exit(1)
-			}
-			_, _ = f.Write(payload)
-			_ = f.Sync()
-			_ = f.Close()
-			_ = os.Rename(sp, dp)
-			if df, err := os.Open(plainDir); err == nil {
-				_ = df.Sync()
-				_ = df.Close()
-			}
-			plainLat = append(plainLat, time.Since(t0))
-		}
-		rep.PlainFsyncP50Us = percentileUs(plainLat, 0.50)
-		rep.PlainFsyncP99Us = percentileUs(plainLat, 0.99)
+		rep.DJFSOverV2SyncP50Us = percentileUs(djfsLat, 0.50)
+		rep.DJFSOverV2SyncP99Us = percentileUs(djfsLat, 0.99)
+		_ = v2.Close()
 	}
 
 	if *asJSON {
@@ -384,11 +380,14 @@ func main() {
 		return
 	}
 
-	fmt.Printf("HIP-1345 DJFS Evaluation Summary\n")
-	fmt.Printf("  npm-ci (%d files): raw_ops=%d -> published_ops=%d | S3 PUTs=%d (%.4f PUTs/file vs %.2f Flush-per-close)\n",
-		rep.NpmSurvivingFiles, rep.NpmRawOps, rep.NpmPublishedOps, rep.NpmS3Puts, rep.NpmPutsPerFile, rep.ClosePutsPerFile)
+	fmt.Printf("HIP-1345 DJFS vs Current VFS v2 Matched-Durability Summary\n")
+	fmt.Printf("  npm-ci (%d files, both disk-journaled + epoch Flush):\n", rep.NpmSurvivingFiles)
+	fmt.Printf("    VFS v2 direct : journal_recs=%d | S3 PUTs=%d (%.4f PUTs/file) | %.1f ms\n",
+		rep.V2DirectJournalRecs, rep.V2DirectS3Puts, rep.V2DirectPutsPerFile, rep.V2DirectDurationMs)
+	fmt.Printf("    DJFS + VFS v2 : journal_recs=%d | S3 PUTs=%d (%.4f PUTs/file) | %.1f ms (raw=%d -> pub=%d)\n",
+		rep.DJFSJournalRecs, rep.DJFSS3Puts, rep.DJFSPutsPerFile, rep.DJFSDurationMs, rep.DJFSRawOps, rep.DJFSPublishedOps)
 	fmt.Printf("  scratch cancellation: %d raw ops -> %d journal ops\n", rep.ScratchRawOps, rep.ScratchJournalOps)
 	fmt.Printf("  atomic WriteTmp+Rename: %d raw ops -> %d journal ops\n", rep.AtomicRawOps, rep.AtomicJournalOps)
-	fmt.Printf("  fsync latency (us): DJFS p50=%.1f p99=%.1f | Plain disk p50=%.1f p99=%.1f\n",
-		rep.DJFSFsyncP50Us, rep.DJFSFsyncP99Us, rep.PlainFsyncP50Us, rep.PlainFsyncP99Us)
+	fmt.Printf("  matched local Sync latency (us): VFS v2 native p50=%.1f p99=%.1f | DJFS+v2 p50=%.1f p99=%.1f\n",
+		rep.V2NativeSyncP50Us, rep.V2NativeSyncP99Us, rep.DJFSOverV2SyncP50Us, rep.DJFSOverV2SyncP99Us)
 }

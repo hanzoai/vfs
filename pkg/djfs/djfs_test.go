@@ -664,46 +664,151 @@ func TestCodecRoundTripAndTamperRejection(t *testing.T) {
 	}
 }
 
+func cloneMemTree(t testing.TB, src *djfs.MemTree) *djfs.MemTree {
+	t.Helper()
+	eng, err := djfs.NewFromTree(djfs.Config{}, src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return eng.Snapshot()
+}
+
+func treesEqualExact(got, want *djfs.MemTree) error {
+	if err := got.CheckInvariants(); err != nil {
+		return fmt.Errorf("got invariant failure: %w", err)
+	}
+	if err := want.CheckInvariants(); err != nil {
+		return fmt.Errorf("want invariant failure: %w", err)
+	}
+	gotDirs, gotFiles, _, _ := got.Counts()
+	wantDirs, wantFiles, _, _ := want.Counts()
+	if gotDirs != wantDirs || gotFiles != wantFiles {
+		return fmt.Errorf("counts (dirs=%d, files=%d), want (dirs=%d, files=%d)", gotDirs, gotFiles, wantDirs, wantFiles)
+	}
+	var walk func(dir djfs.InodeID, path string) error
+	walk = func(dir djfs.InodeID, path string) error {
+		ga, err := got.Stat(dir)
+		if err != nil {
+			return fmt.Errorf("stat got dir %s (%d): %w", path, dir, err)
+		}
+		wa, err := want.Stat(dir)
+		if err != nil {
+			return fmt.Errorf("stat want dir %s (%d): %w", path, dir, err)
+		}
+		if ga.Mode != wa.Mode || ga.Nlink != wa.Nlink {
+			return fmt.Errorf("dir %s attr got %+v, want %+v", path, ga, wa)
+		}
+		ge, err := got.ReadDir(dir)
+		if err != nil {
+			return fmt.Errorf("readdir got %s: %w", path, err)
+		}
+		we, err := want.ReadDir(dir)
+		if err != nil {
+			return fmt.Errorf("readdir want %s: %w", path, err)
+		}
+		if len(ge) != len(we) {
+			return fmt.Errorf("dir %s len=%d, want %d", path, len(ge), len(we))
+		}
+		for i := range ge {
+			if ge[i] != we[i] {
+				return fmt.Errorf("dir %s entry[%d] got %+v, want %+v", path, i, ge[i], we[i])
+			}
+			childPath := path + "/" + ge[i].Name
+			if ge[i].Mode.IsDir() {
+				if err := walk(ge[i].ID, childPath); err != nil {
+					return err
+				}
+				continue
+			}
+			gfa, err := got.Stat(ge[i].ID)
+			if err != nil {
+				return fmt.Errorf("stat got file %s: %w", childPath, err)
+			}
+			wfa, err := want.Stat(we[i].ID)
+			if err != nil {
+				return fmt.Errorf("stat want file %s: %w", childPath, err)
+			}
+			if gfa.Mode != wfa.Mode || gfa.Size != wfa.Size || gfa.Nlink != wfa.Nlink {
+				return fmt.Errorf("file %s attr got %+v, want %+v", childPath, gfa, wfa)
+			}
+			gb, err := got.ReadFile(ge[i].ID)
+			if err != nil {
+				return fmt.Errorf("read got %s: %w", childPath, err)
+			}
+			wb, err := want.ReadFile(we[i].ID)
+			if err != nil {
+				return fmt.Errorf("read want %s: %w", childPath, err)
+			}
+			if !bytes.Equal(gb, wb) {
+				return fmt.Errorf("file %s bytes %q != %q", childPath, gb, wb)
+			}
+		}
+		return nil
+	}
+	return walk(djfs.RootInode, "")
+}
+
 func TestCrashConsistencyExploreOnJournalDisk(t *testing.T) {
 	ctx := context.Background()
 	clk := newStepClock()
+	t0 := clk.Now()
 	disk := crash.New()
 	j := openCrashJournal(t, disk, 0)
 
-	eng, err := djfs.New(djfs.Config{
+	oracle := djfs.NewMemTree(t0)
+	eng, err := djfs.NewFromTree(djfs.Config{
 		Journal: j,
 		Clock:   clk,
-	})
+	}, oracle)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	type syncedCheck struct {
-		dir  djfs.InodeID
-		name string
-		data []byte
-		gone struct {
-			dir  djfs.InodeID
-			name string
-		}
-	}
+	var checkpoints []*djfs.MemTree
+	checkpoints = append(checkpoints, cloneMemTree(t, oracle)) // 0: empty
 
 	dA, err := eng.Mkdir(ctx, djfs.RootInode, "dirA", 0o755)
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := oracle.ApplyBatch(ctx, djfs.Batch{Ops: []djfs.DeltaOp{
+		{Kind: djfs.DeltaMkdir, Dir: djfs.RootInode, Name: "dirA", ID: dA.ID, Attr: dA},
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	dB, err := eng.Mkdir(ctx, djfs.RootInode, "dirB", 0o755)
 	if err != nil {
 		t.Fatal(err)
 	}
+	if err := oracle.ApplyBatch(ctx, djfs.Batch{Ops: []djfs.DeltaOp{
+		{Kind: djfs.DeltaMkdir, Dir: djfs.RootInode, Name: "dirB", ID: dB.ID, Attr: dB},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	// Permanent synced file that is never renamed — must never vanish after mark 1.
+	fKeep, err := eng.Create(ctx, dA.ID, "keep.txt", 0o644, []byte("keep-durable"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := oracle.ApplyBatch(ctx, djfs.Batch{Ops: []djfs.DeltaOp{
+		{Kind: djfs.DeltaCreateFile, Dir: dA.ID, Name: "keep.txt", ID: fKeep.ID, Attr: fKeep, Data: []byte("keep-durable")},
+	}}); err != nil {
+		t.Fatal(err)
+	}
 	f1, err := eng.Create(ctx, dA.ID, "alpha.txt", 0o644, []byte("v1-durable"))
 	if err != nil {
+		t.Fatal(err)
+	}
+	if err := oracle.ApplyBatch(ctx, djfs.Batch{Ops: []djfs.DeltaOp{
+		{Kind: djfs.DeltaCreateFile, Dir: dA.ID, Name: "alpha.txt", ID: f1.ID, Attr: f1, Data: []byte("v1-durable")},
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := eng.Fsync(ctx, f1.ID); err != nil {
 		t.Fatal(err)
 	}
-	disk.Mark(syncedCheck{dir: dA.ID, name: "alpha.txt", data: []byte("v1-durable")})
+	checkpoints = append(checkpoints, cloneMemTree(t, oracle)) // 1: keep.txt + alpha.txt synced
+	disk.Mark(1)
 
 	// Transient scratch file that cancels before next sync.
 	if _, err := eng.Create(ctx, dB.ID, "scratch.tmp", 0o600, []byte("ephemeral")); err != nil {
@@ -713,31 +818,44 @@ func TestCrashConsistencyExploreOnJournalDisk(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Cross-directory atomic move + payload update, then Fsync.
-	if _, err := eng.Write(ctx, dA.ID, "alpha.txt", []byte("v2-moved-durable")); err != nil {
+	// Cross-directory atomic move + payload update, then FsyncDir.
+	w1, err := eng.Write(ctx, dA.ID, "alpha.txt", []byte("v2-moved-durable"))
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err := eng.Rename(ctx, dA.ID, "alpha.txt", dB.ID, "beta.txt"); err != nil {
 		t.Fatal(err)
 	}
+	if err := oracle.ApplyBatch(ctx, djfs.Batch{Ops: []djfs.DeltaOp{
+		{Kind: djfs.DeltaWrite, Dir: dA.ID, Name: "alpha.txt", ID: f1.ID, Attr: w1, Data: []byte("v2-moved-durable")},
+		{Kind: djfs.DeltaRename, Dir: dA.ID, Name: "alpha.txt", DstDir: dB.ID, DstName: "beta.txt", ID: f1.ID},
+	}}); err != nil {
+		t.Fatal(err)
+	}
 	if err := eng.FsyncDir(ctx, dB.ID); err != nil {
 		t.Fatal(err)
 	}
-	chk2 := syncedCheck{dir: dB.ID, name: "beta.txt", data: []byte("v2-moved-durable")}
-	chk2.gone.dir = dA.ID
-	chk2.gone.name = "alpha.txt"
-	disk.Mark(chk2)
+	checkpoints = append(checkpoints, cloneMemTree(t, oracle)) // 2: keep.txt + beta.txt synced, alpha.txt gone
+	disk.Mark(2)
 
 	// Appended but unsynced tail batch to exercise torn/prefix/subset volatile states.
-	if _, err := eng.Create(ctx, dB.ID, "unsynced.tail", 0o644, []byte("volatile-tail")); err != nil {
+	fTail, err := eng.Create(ctx, dB.ID, "unsynced.tail", 0o644, []byte("volatile-tail"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := oracle.ApplyBatch(ctx, djfs.Batch{Ops: []djfs.DeltaOp{
+		{Kind: djfs.DeltaCreateFile, Dir: dB.ID, Name: "unsynced.tail", ID: fTail.ID, Attr: fTail, Data: []byte("volatile-tail")},
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := eng.FlushJournal(ctx); err != nil {
 		t.Fatal(err)
 	}
+	checkpoints = append(checkpoints, cloneMemTree(t, oracle)) // 3: unsynced tail landed
 	_ = j.Close()
 
 	var explored int
+	seenCheckpoints := map[int]bool{}
 	err = disk.Explore(2, 20261118, func(img *crash.Disk, point int, v crash.Variant) error {
 		explored++
 		rj, openErr := journal.Open("", journal.Options{
@@ -767,27 +885,39 @@ func TestCrashConsistencyExploreOnJournalDisk(t *testing.T) {
 			return fmt.Errorf("torn cross-dir rename: both dirA/alpha.txt and dirB/beta.txt exist")
 		}
 
-		// Verify latest completed Fsync mark before crash point n holds.
+		// Every recovered crash state must match an exact atomic uncoalesced oracle
+		// checkpoint in [completedMark .. completedMark+1], never losing a synced file.
 		marks := disk.Marks(point)
+		minIdx := 0
 		if len(marks) > 0 {
-			last := marks[len(marks)-1].(syncedCheck)
-			in, lErr := snap.Lookup(last.dir, last.name)
-			if lErr != nil {
-				return fmt.Errorf("synced file (%d,%s) lost: %w", last.dir, last.name, lErr)
+			minIdx = marks[len(marks)-1].(int)
+		}
+		if minIdx >= 1 {
+			inKeep, kErr := snap.Lookup(dA.ID, "keep.txt")
+			if kErr != nil {
+				return fmt.Errorf("synced permanent file dirA/keep.txt lost at mark %d (%s): %w", minIdx, v, kErr)
 			}
-			got, rErr := snap.ReadFile(in.ID)
-			if rErr != nil {
-				return rErr
-			}
-			if !bytes.Equal(got, last.data) {
-				return fmt.Errorf("synced file (%d,%s) bytes=%q, want %q", last.dir, last.name, got, last.data)
-			}
-			if last.gone.dir != 0 {
-				if _, gErr := snap.Lookup(last.gone.dir, last.gone.name); !errors.Is(gErr, fs.ErrNotExist) {
-					return fmt.Errorf("renamed-away entry (%d,%s) reappeared: %v", last.gone.dir, last.gone.name, gErr)
-				}
+			gotKeep, rErr := snap.ReadFile(inKeep.ID)
+			if rErr != nil || !bytes.Equal(gotKeep, []byte("keep-durable")) {
+				return fmt.Errorf("synced keep.txt corrupt at mark %d (%s): got %q, err=%v", minIdx, v, gotKeep, rErr)
 			}
 		}
+		maxIdx := min(minIdx+1, len(checkpoints)-1)
+		matched := -1
+		var lastDiff error
+		for idx := minIdx; idx <= maxIdx; idx++ {
+			if diffErr := treesEqualExact(snap, checkpoints[idx]); diffErr == nil {
+				matched = idx
+				break
+			} else {
+				lastDiff = diffErr
+			}
+		}
+		if matched < 0 {
+			return fmt.Errorf("crash point %d (%s, mark=%d) matched neither oracle[%d] nor oracle[%d]: %v",
+				point, v, minIdx, minIdx, maxIdx, lastDiff)
+		}
+		seenCheckpoints[matched] = true
 		return nil
 	})
 	if err != nil {
@@ -795,6 +925,280 @@ func TestCrashConsistencyExploreOnJournalDisk(t *testing.T) {
 	}
 	if explored < 10 {
 		t.Fatalf("expected crash explorer to check >= 10 distinct disk states, got %d", explored)
+	}
+	if !seenCheckpoints[1] || !seenCheckpoints[2] {
+		t.Fatalf("expected crash explorer to observe both pre-rename (1) and post-rename (2) checkpoints, saw %v", seenCheckpoints)
+	}
+}
+
+// TestRegressionSeed0CrossDirRenameParentExpansion is the shrunk minimal
+// regression extracted from randomized seed-0 step 136 covering both cases:
+//  1. Unentangled sibling subtree FsyncDir(sub) under an already-committed
+//     parent d10 does not split the unsynced cross-dir rename {d11, Root}.
+//  2. FsyncDir(sub2) under a newly created dir d12 (whose parent is Root)
+//     expands d12 -> Root and MUST transitively pull in Root's entangled
+//     partner d11 so the cross-dir rename is flushed atomically (never torn
+//     into a duplicate DeltaCreateFile at Root/d while d11/d remains on disk).
+func TestRegressionSeed0CrossDirRenameParentExpansion(t *testing.T) {
+	ctx := context.Background()
+	clk := newStepClock()
+	t0 := clk.Now()
+
+	oracle := djfs.NewMemTree(t0)
+	published := djfs.NewMemTree(t0)
+	disk := crash.New()
+	j := openCrashJournal(t, disk, 0)
+	defer j.Close()
+
+	eng, err := djfs.NewFromTree(djfs.Config{
+		Journal: j,
+		Target:  published,
+		Clock:   clk,
+	}, published)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	d10, err := eng.Mkdir(ctx, djfs.RootInode, "a", 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d11, err := eng.Mkdir(ctx, djfs.RootInode, "index.js", 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f16, err := eng.Create(ctx, d11.ID, "d", 0o644, []byte("seed0-payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := oracle.ApplyBatch(ctx, djfs.Batch{Ops: []djfs.DeltaOp{
+		{Kind: djfs.DeltaMkdir, Dir: djfs.RootInode, Name: "a", ID: d10.ID, Attr: d10},
+		{Kind: djfs.DeltaMkdir, Dir: djfs.RootInode, Name: "index.js", ID: d11.ID, Attr: d11},
+		{Kind: djfs.DeltaCreateFile, Dir: d11.ID, Name: "d", ID: f16.ID, Attr: f16, Data: []byte("seed0-payload")},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Publish(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	// Cross-dir rename entangling {d11, Root}.
+	if err := eng.Rename(ctx, d11.ID, "d", djfs.RootInode, "d"); err != nil {
+		t.Fatal(err)
+	}
+	// Case 1: subdirectory under already-committed d10 (entangles {d10, sub}).
+	sub, err := eng.Mkdir(ctx, d10.ID, "sub", 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oracleSubOnly := cloneMemTree(t, oracle)
+	if err := oracleSubOnly.ApplyBatch(ctx, djfs.Batch{Ops: []djfs.DeltaOp{
+		{Kind: djfs.DeltaMkdir, Dir: d10.ID, Name: "sub", ID: sub.ID, Attr: sub},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.FsyncDir(ctx, sub.ID); err != nil {
+		t.Fatal(err)
+	}
+	rec1, err := djfs.RecoverFromTree(ctx, djfs.Config{Clock: clk}, published, j)
+	if err != nil {
+		t.Fatalf("RecoverFromTree after Case 1: %v", err)
+	}
+	if err := treesEqualExact(rec1.Snapshot(), oracleSubOnly); err != nil {
+		t.Fatalf("Case 1 recovered tree diverged from uncoalesced oracle: %v", err)
+	}
+
+	// Case 2: newly born d12 under Root + child sub2 under d12 -> FsyncDir(sub2)
+	// expands sub2 -> d12 -> Root and transitively pulls in entangled d11.
+	d12, err := eng.Mkdir(ctx, djfs.RootInode, "d12", 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub2, err := eng.Mkdir(ctx, d12.ID, "sub2", 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := oracle.ApplyBatch(ctx, djfs.Batch{Ops: []djfs.DeltaOp{
+		{Kind: djfs.DeltaRename, Dir: d11.ID, Name: "d", DstDir: djfs.RootInode, DstName: "d", ID: f16.ID},
+		{Kind: djfs.DeltaMkdir, Dir: d10.ID, Name: "sub", ID: sub.ID, Attr: sub},
+		{Kind: djfs.DeltaMkdir, Dir: djfs.RootInode, Name: "d12", ID: d12.ID, Attr: d12},
+		{Kind: djfs.DeltaMkdir, Dir: d12.ID, Name: "sub2", ID: sub2.ID, Attr: sub2},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.FsyncDir(ctx, sub2.ID); err != nil {
+		t.Fatal(err)
+	}
+	rec2, err := djfs.RecoverFromTree(ctx, djfs.Config{Clock: clk}, published, j)
+	if err != nil {
+		t.Fatalf("RecoverFromTree after Case 2: %v", err)
+	}
+	if err := treesEqualExact(rec2.Snapshot(), oracle); err != nil {
+		t.Fatalf("Case 2 recovered tree diverged from uncoalesced oracle: %v", err)
+	}
+}
+
+// TestCrossDirRenameAndFsyncCrashCutsExactOracle enumerates crash cuts across
+// cross-directory file overwrite rename, cross-directory subtree move, and
+// chained 3-directory renames with interleaved fsyncs, asserting exact
+// recovered whole-tree equivalence against the uncoalesced oracle at every cut.
+func TestCrossDirRenameAndFsyncCrashCutsExactOracle(t *testing.T) {
+	ctx := context.Background()
+	clk := newStepClock()
+	t0 := clk.Now()
+	disk := crash.New()
+	j := openCrashJournal(t, disk, 0)
+
+	oracle := djfs.NewMemTree(t0)
+	eng, err := djfs.NewFromTree(djfs.Config{Journal: j, Clock: clk}, oracle)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	checkpoints := []*djfs.MemTree{cloneMemTree(t, oracle)}
+
+	// Checkpoint 1: create dirA, dirB, dirC, anchor, src, victim dst, and dirA/sub/deep.
+	dA, err := eng.Mkdir(ctx, djfs.RootInode, "dirA", 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dB, err := eng.Mkdir(ctx, djfs.RootInode, "dirB", 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dC, err := eng.Mkdir(ctx, djfs.RootInode, "dirC", 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sub, err := eng.Mkdir(ctx, dA.ID, "sub", 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fAnchor, err := eng.Create(ctx, dA.ID, "anchor.txt", 0o644, []byte("anchor-v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fSrc, err := eng.Create(ctx, dA.ID, "src.txt", 0o644, []byte("new-winner"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fVictim, err := eng.Create(ctx, dB.ID, "dst.txt", 0o644, []byte("old-victim"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	fDeep, err := eng.Create(ctx, sub.ID, "deep.txt", 0o644, []byte("nested-data"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := oracle.ApplyBatch(ctx, djfs.Batch{Ops: []djfs.DeltaOp{
+		{Kind: djfs.DeltaMkdir, Dir: djfs.RootInode, Name: "dirA", ID: dA.ID, Attr: dA},
+		{Kind: djfs.DeltaMkdir, Dir: djfs.RootInode, Name: "dirB", ID: dB.ID, Attr: dB},
+		{Kind: djfs.DeltaMkdir, Dir: djfs.RootInode, Name: "dirC", ID: dC.ID, Attr: dC},
+		{Kind: djfs.DeltaMkdir, Dir: dA.ID, Name: "sub", ID: sub.ID, Attr: sub},
+		{Kind: djfs.DeltaCreateFile, Dir: dA.ID, Name: "anchor.txt", ID: fAnchor.ID, Attr: fAnchor, Data: []byte("anchor-v1")},
+		{Kind: djfs.DeltaCreateFile, Dir: dA.ID, Name: "src.txt", ID: fSrc.ID, Attr: fSrc, Data: []byte("new-winner")},
+		{Kind: djfs.DeltaCreateFile, Dir: dB.ID, Name: "dst.txt", ID: fVictim.ID, Attr: fVictim, Data: []byte("old-victim")},
+		{Kind: djfs.DeltaCreateFile, Dir: sub.ID, Name: "deep.txt", ID: fDeep.ID, Attr: fDeep, Data: []byte("nested-data")},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.FsyncDir(ctx, djfs.RootInode); err != nil {
+		t.Fatal(err)
+	}
+	checkpoints = append(checkpoints, cloneMemTree(t, oracle))
+	disk.Mark(1)
+
+	// Checkpoint 2: cross-dir overwrite Rename(dirA/src.txt -> dirB/dst.txt) + FsyncDir(dirB).
+	if err := eng.Rename(ctx, dA.ID, "src.txt", dB.ID, "dst.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := oracle.ApplyBatch(ctx, djfs.Batch{Ops: []djfs.DeltaOp{
+		{Kind: djfs.DeltaRename, Dir: dA.ID, Name: "src.txt", DstDir: dB.ID, DstName: "dst.txt", ID: fSrc.ID},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.FsyncDir(ctx, dB.ID); err != nil {
+		t.Fatal(err)
+	}
+	checkpoints = append(checkpoints, cloneMemTree(t, oracle))
+	disk.Mark(2)
+
+	// Checkpoint 3: cross-dir directory Rename(dirA/sub -> dirC/sub_moved) + FsyncDir(dirC).
+	if err := eng.Rename(ctx, dA.ID, "sub", dC.ID, "sub_moved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := oracle.ApplyBatch(ctx, djfs.Batch{Ops: []djfs.DeltaOp{
+		{Kind: djfs.DeltaRename, Dir: dA.ID, Name: "sub", DstDir: dC.ID, DstName: "sub_moved", ID: sub.ID},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.FsyncDir(ctx, dC.ID); err != nil {
+		t.Fatal(err)
+	}
+	checkpoints = append(checkpoints, cloneMemTree(t, oracle))
+	disk.Mark(3)
+
+	// Checkpoint 4: chained 3-dir file move (dirB/dst.txt -> dirA/mid.txt -> dirC/final.txt) + FsyncDir(dirC).
+	if err := eng.Rename(ctx, dB.ID, "dst.txt", dA.ID, "mid.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.Rename(ctx, dA.ID, "mid.txt", dC.ID, "final.txt"); err != nil {
+		t.Fatal(err)
+	}
+	if err := oracle.ApplyBatch(ctx, djfs.Batch{Ops: []djfs.DeltaOp{
+		{Kind: djfs.DeltaRename, Dir: dB.ID, Name: "dst.txt", DstDir: dA.ID, DstName: "mid.txt", ID: fSrc.ID},
+		{Kind: djfs.DeltaRename, Dir: dA.ID, Name: "mid.txt", DstDir: dC.ID, DstName: "final.txt", ID: fSrc.ID},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := eng.FsyncDir(ctx, dC.ID); err != nil {
+		t.Fatal(err)
+	}
+	checkpoints = append(checkpoints, cloneMemTree(t, oracle))
+	disk.Mark(4)
+	_ = j.Close()
+
+	var explored int
+	err = disk.Explore(2, 13450001, func(img *crash.Disk, point int, v crash.Variant) error {
+		explored++
+		rj, openErr := journal.Open("", journal.Options{
+			Capacity: 2 << 20,
+			Segment:  256 << 10,
+			Lineage:  []byte("djfs-test-vol-round-1"),
+			Disk:     img,
+		})
+		if openErr != nil {
+			return fmt.Errorf("journal.Open: %w", openErr)
+		}
+		defer rj.Close()
+
+		recEng, recErr := djfs.Recover(ctx, djfs.Config{Clock: clk}, rj)
+		if recErr != nil {
+			return fmt.Errorf("djfs.Recover: %w", recErr)
+		}
+		snap := recEng.Snapshot()
+		marks := disk.Marks(point)
+		minIdx := 0
+		if len(marks) > 0 {
+			minIdx = marks[len(marks)-1].(int)
+		}
+		maxIdx := min(minIdx+1, len(checkpoints)-1)
+		var lastErr error
+		for idx := minIdx; idx <= maxIdx; idx++ {
+			if diffErr := treesEqualExact(snap, checkpoints[idx]); diffErr == nil {
+				return nil
+			} else {
+				lastErr = diffErr
+			}
+		}
+		return fmt.Errorf("point %d (%s, mark=%d) matched no exact oracle checkpoint [%d..%d]: %v",
+			point, v, minIdx, minIdx, maxIdx, lastErr)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if explored < 20 {
+		t.Fatalf("expected >= 20 crash states explored, got %d", explored)
 	}
 }
 
@@ -908,8 +1312,19 @@ func TestRandomizedEquivalenceAgainstUncoalescedOracle(t *testing.T) {
 			case 7, 8:
 				dstDir := liveDirs[rng.IntN(len(liveDirs))]
 				dstName := names[rng.IntN(len(names))]
+				preSrc, preSrcErr := eng.Lookup(dir, name)
+				preDst, preDstErr := eng.Lookup(dstDir, dstName)
 				err := eng.Rename(ctx, dir, name, dstDir, dstName)
 				if err == nil {
+					if preSrcErr == nil && preDstErr == nil && preDst.IsDir() && preDst.ID != preSrc.ID {
+						kept := liveDirs[:0]
+						for _, id := range liveDirs {
+							if id != preDst.ID {
+								kept = append(kept, id)
+							}
+						}
+						liveDirs = kept
+					}
 					ops := []djfs.DeltaOp{
 						{Kind: djfs.DeltaRename, Dir: dir, Name: name, DstDir: dstDir, DstName: dstName},
 						{Kind: djfs.DeltaSetAttr, ID: dir, Attr: mustStatEngine(t, eng, dir)},

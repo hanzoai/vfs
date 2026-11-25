@@ -169,7 +169,7 @@ func DecodeBatch(raw []byte) (Batch, error) {
 	if len(cur) != 0 {
 		return Batch{}, fmt.Errorf("%w: %d trailing bytes after batch", ErrCorrupt, len(cur))
 	}
-	return Batch{Epoch: epoch, MaxSeq:  maxSeq, Ops: ops}, nil
+	return Batch{Epoch: epoch, MaxSeq: maxSeq, Ops: ops}, nil
 }
 
 func appendBytes(dst, b []byte) []byte {

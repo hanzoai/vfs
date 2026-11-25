@@ -266,17 +266,47 @@ segment, each durable `FsyncDir` executes **one** sequential `pwrite +
 fdatasync` instead of two separate filesystem metadata/data syncs (`fdatasync`
 on the temp file plus `fsync` on the parent directory after `rename`).
 
-### Integration path for `Volume` (#57 + #70)
+### Convergence on VFS v2 (`v0.7.0` + `#89`, isolated from production paths)
 
-1. Attach `djfs.Engine` in front of `Volume`'s namespace handlers (`Create`,
-   `Mkdir`, `Remove`, `Rename`, `SetAttr`) with `Config.Journal` bound to the
-   per-`(Volume.ID, Round)` `journal.Journal` instance and `MaxPublishWindow =
-   5 * time.Second`.
-2. Route FUSE `FLUSH` (`close(2)`) to `Engine.CloseFile` (zero S3 calls, zero
-   disk syncs), FUSE `FSYNC` / `FSYNCDIR` to `Engine.Fsync` / `Engine.FsyncDir`
-   (component-atomic local journal sync), and the 5 s `journal.Due` publisher
-   loop to `Engine.Publish` (Layer-2 coalesced prolly-tree commit + `Publish` +
-   `Reclaim`).
-3. Keep large file extents (`> 64 KiB`) on the side bulk spool / FastCDC `pack`
-   writer (`docs/journal.md` item 8) so ordered `DJFS` journal batches carry
-   only compact metadata deltas and inline `<= 16 KiB` payloads.
+`pkg/djfs` remains **strictly isolated from production `Volume`, `ledger`,
+`generation`, and `pkg/mount` code paths** while converging its tests, crash
+verification, and matched-durability benchmarks onto VFS v2:
+
+1. **Root-cause fixes on v2:**
+   * Fixed transitive entanglement closure in `flushComponentExclusiveLocked`
+     and `Publish` (`pkg/djfs/djfs.go`): parent expansion now closes over both
+     `entAdj` and parent pointers of born/deleted/moved directories so a
+     cross-directory rename component is never split across batches (pinned by
+     the shrunk seed-0 minimal regression
+     `TestRegressionSeed0CrossDirRenameParentExpansion`).
+   * Fixed concurrent-delete `dirtyP` clearing in `Publish` when a directory
+     was removed while `Target.ApplyBatch` was in flight.
+   * Upgraded `TestCrashConsistencyExploreOnJournalDisk` and added
+     `TestCrossDirRenameAndFsyncCrashCutsExactOracle` to assert **exact
+     whole-tree recovered equivalence against uncoalesced oracle checkpoints**
+     and zero loss of permanent synced files across every crash cut (`lost`,
+     `all`, `prefix`, `torn`, `subset`, `scatter`).
+   * Reused VFS v2's native `Config.Journal`, `Volume.Rename`, `Volume.Sync`,
+     `Volume.Flush`, and `Volume.Recovery` in `pkg/djfs/volume_test.go` and
+     `tools/djfs/main.go` rather than running a second redundant journal
+     alongside `Volume` (eliminating segment-size mismatch and verifying native
+     v2 crash reopen in `TestVolumeNativeJournalCrashReopen`).
+2. **Matched-durability comparison against current VFS v2 (Apple M1 Max, both
+   backed by native VFS v2 `Config.Journal` + identical `Flush` / `Sync` contract):**
+   * `npm-ci` 1,000-file extraction (`tools/djfs`, both disk-journaled + epoch
+     `Flush`):
+     * Current VFS v2 direct: `3,102` v2 journal records, `19` S3 PUTs
+       (`0.0190 PUTs/file`), `59.1 ms`.
+     * `pkg/djfs` + VFS v2: `2,025` v2 journal records (`1.53x` fewer), `20` S3
+       PUTs (`0.0200 PUTs/file`), `34.5 ms` (`3,077` raw ops -> `1,051`
+       published ops).
+   * 20,000-file `TestVolumeNpmCiObjectBudgetAcceptance`: `0.0220 PUTs/file`
+     (`80,602` raw ops -> `20,401` published ops, `439` S3 PUTs).
+   * Matched local `vol.Sync(ctx)` (`BenchmarkDJFSvsV2MatchedDurabilityFsync`,
+     `Create(tmp) + Write(4 KiB) + Rename(tmp -> cur) + Sync`):
+     * `V2Native`: `760.8 us/op`
+     * `DJFSOverV2`: `710.2 us/op`
+   * Note that under matched durability, current VFS v2 already achieves
+     `~0.019 PUTs/file` on batched epoch `Flush`, while `pkg/djfs` further
+     reduces v2 journal records by `1.53x–1.57x` on staging-heavy extraction
+     and up to `10,000x` on intra-epoch scratch churn.
