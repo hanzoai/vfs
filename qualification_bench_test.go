@@ -162,7 +162,7 @@ func benchWriteLatency(b *testing.B, size int, realFsync bool) {
 	_, _, v, _ := pair(b, nil, func(c *vfs.Config) {
 		c.JournalCapacity = 1 << 30
 		if realFsync {
-			c.Journal = b.TempDir()
+			c.Journal = qualJournalDir(b)
 			c.Disk = nil
 		}
 	})
@@ -209,7 +209,7 @@ func BenchmarkQualificationRecoveryAndDurabilityLag(b *testing.B) {
 		b.ReportAllocs()
 		for i := 0; i < b.N; i++ {
 			b.StopTimer()
-			jroot := b.TempDir()
+			jroot := qualJournalDir(b)
 			mem := storetest.NewMem()
 			c := vfsAge(b)
 			c0 := cfg(mem, c, 0)

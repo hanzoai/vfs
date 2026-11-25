@@ -19,6 +19,16 @@ import (
 	"github.com/hanzoai/vfs/pkg/backend"
 )
 
+func qualJournalDir(t testing.TB) string {
+	t.Helper()
+	dir, err := os.MkdirTemp(storetest.Journals(), "qual-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.RemoveAll(dir) })
+	return dir
+}
+
 // TestQualificationPosixCrashAndTornJournalRecovery verifies that every POSIX operation
 // (Create, Mkdir, WriteAt, Link, Symlink, Mknod, Rename, RenameExchange, SetAttr, Punch,
 // Remove, and open-unlinked orphans) survives a crash and replays cleanly even when a
@@ -26,7 +36,7 @@ import (
 // corruption inside a durable record is never silently accepted.
 func TestQualificationPosixCrashAndTornJournalRecovery(t *testing.T) {
 	t.Run("torn-tail-recovers-all-synced-posix", func(t *testing.T) {
-		jroot := t.TempDir()
+		jroot := qualJournalDir(t)
 		mem := storetest.NewMem()
 		c := vfsAge(t)
 		conf0 := cfg(mem, c, 0)
@@ -192,7 +202,7 @@ func TestQualificationPosixCrashAndTornJournalRecovery(t *testing.T) {
 	})
 
 	t.Run("mid-log-corruption-never-serves-corrupt-data", func(t *testing.T) {
-		jroot := t.TempDir()
+		jroot := qualJournalDir(t)
 		mem := storetest.NewMem()
 		c := vfsAge(t)
 		conf0 := cfg(mem, c, 0)
@@ -381,7 +391,7 @@ func TestQualificationHighLatencyAndOutageDurabilityContract(t *testing.T) {
 
 	// Simulate migration to a brand-new host (fresh empty journal directory, higher fencing round).
 	migratedCfg := cfg(mem, c, 2)
-	migratedCfg.Journal = t.TempDir()
+	migratedCfg.Journal = qualJournalDir(t)
 	v2, err := vfs.Attach(ctx, migratedCfg)
 	if err != nil {
 		t.Fatalf("Attach on destination host after Flush fence failed: %v", err)
@@ -574,7 +584,7 @@ func TestQualificationConsistentSnapshotsUnderConcurrentPosix(t *testing.T) {
 // and backend infrastructure cannot decrypt, substitute, or corrupt each other's heads,
 // shards, packs, extension objects, or local journals.
 func TestQualificationTenantIsolation(t *testing.T) {
-	jroot := t.TempDir()
+	jroot := qualJournalDir(t)
 	memA, memB := storetest.NewMem(), storetest.NewMem()
 	keyA, keyB := vfsAge(t), vfsAge(t)
 
@@ -675,23 +685,80 @@ func TestQualificationTenantIsolation(t *testing.T) {
 	}
 }
 
+// TestQualificationGenCompleteMidMutate exercises the concurrency window where a
+// background generation completes (updating v.root, v.ns.bytes, and evicting clean
+// entries from v.files) concurrently with Remove and Truncate mutations on files
+// settled by that generation, verifying exact file sizes, zero orphan tData records,
+// and exact usage counters.
+func TestQualificationGenCompleteMidMutate(t *testing.T) {
+	mem, c, v, _ := pair(t, nil, func(conf *vfs.Config) {
+		conf.Dirty = 128 << 10
+		conf.Overlay = 8 // trigger aggressive background generations
+		conf.JournalCapacity = 16 << 20
+	})
+	const rounds = 40
+	for i := range rounds {
+		rmName := fmt.Sprintf("rm-%03d", i)
+		trName := fmt.Sprintf("tr-%03d", i)
+		rmIn := write(t, v, vfs.RootInode, rmName, content(uint64(i*2+1), 16))
+		trIn := write(t, v, vfs.RootInode, trName, content(uint64(i*2+2), 16))
+		_ = rmIn
+		// Race Flush (g.complete()) directly against Remove and Truncate on those files.
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_ = v.Flush(ctx)
+		}()
+		if err := v.Remove(ctx, vfs.RootInode, rmName); err != nil {
+			t.Fatalf("round %d remove: %v", i, err)
+		}
+		if err := v.Truncate(ctx, trIn.ID, 3); err != nil {
+			t.Fatalf("round %d truncate: %v", i, err)
+		}
+		wg.Wait()
+
+		got, err := v.Lookup(ctx, vfs.RootInode, trName)
+		if err != nil {
+			t.Fatalf("round %d lookup %s: %v", i, trName, err)
+		}
+		if got.Size != 3 {
+			t.Fatalf("round %d %s size=%d want=3", i, trName, got.Size)
+		}
+		if body := readAll(t, v, got.ID); len(body) != 3 {
+			t.Fatalf("round %d %s read %d bytes want 3", i, trName, len(body))
+		}
+		check(t, v)
+	}
+	flush(t, v)
+	check(t, v)
+	check(t, reopen(t, mem, c))
+}
+
 func findJournalSegments(t *testing.T, root string) []string {
 	t.Helper()
 	var segs []string
 	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		if d.IsDir() {
 			return nil
 		}
 		name := d.Name()
-		// Journal segments are numeric/hex segment files inside r<round>/ (not .key, .end, or lock).
-		if strings.HasSuffix(name, ".key") || strings.HasSuffix(name, ".end") || name == "lock" || strings.HasPrefix(name, ".") {
+		// Only inspect committed journal segment files (*.seg); skip transient *.seg.tmp,
+		// .key, .end, and lock files that may be renamed concurrently by the journal.
+		if !strings.HasSuffix(name, ".seg") {
 			return nil
 		}
 		info, err := d.Info()
 		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				return nil
+			}
 			return err
 		}
 		if info.Size() >= 4096 {

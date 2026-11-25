@@ -189,6 +189,12 @@ type Volume struct {
 	ns   counters // usage and links, written into every Head
 	dirn dirCache // link counts of directories
 
+	// mutating is true while mutate() is between build() and apply() (mu unlocked).
+	// If a generation completes during that window, complete() records any newly settled
+	// file data keys and byte deltas here so apply() reconciles drops atomically.
+	mutating    bool
+	settledDrop map[InodeID]settledInfo
+
 	led      *ledger
 	recovery Recovery
 
@@ -486,6 +492,11 @@ func (v *Volume) patience(ctx context.Context, i int) context.Context {
 	return local(ctx)
 }
 
+type settledInfo struct {
+	keys  [][]byte // tData keys added to v.root by a generation completed mid-mutate
+	delta int64    // net change (newBytes - oldBytes) applied to v.ns.bytes
+}
+
 // mutate makes one change. build reads the Volume (from memory: it is given a local
 // context) and returns the change; the change is sealed, appended to the journal, and
 // applied, with no other change in between, and the journal's sequence of it is returned.
@@ -505,6 +516,10 @@ func (v *Volume) mutate(ctx context.Context, build func(context.Context) (*chang
 		if err == nil {
 			c, err = build(v.patience(ctx, i))
 		}
+		if err == nil && c != nil {
+			v.mutating = true
+			v.settledDrop = nil
+		}
 		v.mu.Unlock()
 		if r, ok := absent(err); ok {
 			v.wmu.Unlock()
@@ -519,11 +534,17 @@ func (v *Volume) mutate(ctx context.Context, build func(context.Context) (*chang
 		}
 		seq, logged, err := v.appendWithBackpressure(ctx, c)
 		if err != nil {
+			v.mu.Lock()
+			v.mutating = false
+			v.settledDrop = nil
+			v.mu.Unlock()
 			v.wmu.Unlock()
 			return 0, err
 		}
 		v.mu.Lock()
 		v.apply(c, seq)
+		v.mutating = false
+		v.settledDrop = nil
 		v.logged += logged
 		early := v.gen == nil && v.pressure()
 		v.mu.Unlock()
@@ -767,12 +788,22 @@ func (v *Volume) apply(c *change, seq uint64) {
 	switch c.kind {
 	case changeWrite:
 		f := c.file
+		if cur := v.files[c.ino]; cur != nil {
+			f = cur
+		} else if f != nil {
+			v.files[c.ino] = f
+		}
 		v.write(f, c.data, c.off)
 		f.size = max(f.size, c.off+uint64(len(c.data)))
 		f.mtime, f.ctime = c.when, c.when
 		v.touch(f, seq)
 	case changeSize:
 		f := c.file
+		if cur := v.files[c.ino]; cur != nil {
+			f = cur
+		} else if f != nil {
+			v.files[c.ino] = f
+		}
 		ct := c.ctime
 		if ct.IsZero() {
 			ct = c.when
@@ -795,6 +826,11 @@ func (v *Volume) apply(c *change, seq uint64) {
 		v.touch(f, seq)
 	case changePunch:
 		f := c.file
+		if cur := v.files[c.ino]; cur != nil {
+			f = cur
+		} else if f != nil {
+			v.files[c.ino] = f
+		}
 		v.punch(f, c.off, c.size, c.when)
 		v.touch(f, seq)
 	case changeTree:
@@ -812,15 +848,25 @@ func (v *Volume) apply(c *change, seq uint64) {
 				}
 			}
 		}
+		dBytes := c.dBytes
+		for _, id := range c.gone {
+			if info, ok := v.settledDrop[id]; ok {
+				for _, k := range info.keys {
+					v.over.del(k)
+				}
+				dBytes -= info.delta
+				delete(v.settledDrop, id)
+			}
+		}
 		if c.dFiles < 0 {
 			v.ns.files -= min(v.ns.files, uint64(-c.dFiles))
 		} else {
 			v.ns.files += uint64(c.dFiles)
 		}
-		if c.dBytes < 0 {
-			v.ns.bytes -= min(v.ns.bytes, uint64(-c.dBytes))
+		if dBytes < 0 {
+			v.ns.bytes -= min(v.ns.bytes, uint64(-dBytes))
 		} else {
-			v.ns.bytes += uint64(c.dBytes)
+			v.ns.bytes += uint64(dBytes)
 		}
 		if c.dLinked < 0 {
 			v.ns.linked -= min(v.ns.linked, uint64(-c.dLinked))
@@ -855,6 +901,7 @@ func (v *Volume) apply(c *change, seq uint64) {
 
 // touch records that a file's live layer holds a change as of seq.
 func (v *Volume) touch(f *fileState, seq uint64) {
+	v.files[f.ino] = f
 	f.dep, f.changed = seq, true
 	v.dirtyFiles[f.ino] = f
 }

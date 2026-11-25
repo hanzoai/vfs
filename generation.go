@@ -568,6 +568,19 @@ func (g *generation) complete() error {
 		f.inline, f.ext = s.outInline, s.outExt
 		if len(s.muts) > 0 {
 			v.ns.bytes = v.ns.bytes - min(v.ns.bytes, s.oldBytes) + s.newBytes
+			if v.mutating {
+				if v.settledDrop == nil {
+					v.settledDrop = map[InodeID]settledInfo{}
+				}
+				info := v.settledDrop[s.ino]
+				for _, m := range s.muts {
+					if !m.del && len(m.key) > 0 && m.key[0] == tData {
+						info.keys = append(info.keys, m.key)
+					}
+				}
+				info.delta += int64(s.newBytes) - int64(s.oldBytes)
+				v.settledDrop[s.ino] = info
+			}
 		}
 		if f.refs == 0 && !f.changed {
 			delete(v.files, f.ino)
