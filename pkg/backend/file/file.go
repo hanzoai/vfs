@@ -28,8 +28,7 @@ import (
 	"sync"
 	"syscall"
 
-	"github.com/zeebo/blake3"
-
+	"github.com/hanzoai/vfs/internal/blake3"
 	"github.com/hanzoai/vfs/pkg/backend"
 )
 
@@ -146,7 +145,7 @@ func invalid(key string, err error) error {
 }
 
 func version(data []byte) backend.Version {
-	sum := blake3.Sum256(data)
+	sum := blake3.Sum(data)
 	return backend.Version(hex.EncodeToString(sum[:]))
 }
 

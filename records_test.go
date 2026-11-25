@@ -17,6 +17,7 @@ func internalVolume(t *testing.T, conf Config) (*storetest.Mem, *Volume) {
 	t.Helper()
 	be := storetest.NewMem()
 	conf.Backend, conf.Cipher = be, plainCipher{}
+	conf.Journal, conf.JournalCapacity, conf.Disk = storetest.Journals(), 64<<20, storetest.Disk
 	if err := Create(context.Background(), conf); err != nil {
 		t.Fatal(err)
 	}
@@ -145,7 +146,7 @@ func TestSpillThenFlush(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if v.over.n >= 40 {
+	if v.over.n >= 40+3 { // the bound is checked before a change, which adds up to three records
 		t.Fatalf("%d changes pending, the limit is 40", v.over.n)
 	}
 	if got := be.Puts()["meta"]; got == 0 {
@@ -169,23 +170,41 @@ func TestSpillThenFlush(t *testing.T) {
 	}
 }
 
-// TestSpilledChangesAreInvisibleUntilCommit: shards written by a spill are not
-// part of the Volume until a Flush: a read-only view of the store sees the last
-// commit only.
-func TestSpilledChangesAreInvisibleUntilCommit(t *testing.T) {
+// TestPublishedChangesAreOneGeneration: a Volume that holds few changes in memory
+// publishes early, and what a read-only view of the store sees is the state at a
+// generation's end: the first k files of the hundred, never a part of one generation, and
+// every one once a Flush has returned. The shards of a generation are not part of the
+// Volume until the Head names them.
+func TestPublishedChangesAreOneGeneration(t *testing.T) {
 	ctx := context.Background()
 	be, v := internalVolume(t, Config{Overlay: 10})
 	for i := range 100 {
 		if _, err := v.Create(ctx, RootInode, fmt.Sprintf("f%03d", i), 0o644); err != nil {
 			t.Fatal(err)
 		}
+		ro, err := Open(ctx, Config{Backend: be, Cipher: plainCipher{}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		ents, _ := ro.ReadDir(ctx, RootInode)
+		for j, e := range ents {
+			if e.Name != fmt.Sprintf("f%03d", j) {
+				t.Fatalf("after %d creates a view of the store sees %q at place %d: not a prefix of them", i+1, e.Name, j)
+			}
+		}
+		if len(ents) > i+1 {
+			t.Fatalf("after %d creates a view of the store sees %d files", i+1, len(ents))
+		}
+	}
+	if err := v.Flush(ctx); err != nil {
+		t.Fatal(err)
 	}
 	ro, err := Open(ctx, Config{Backend: be, Cipher: plainCipher{}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if ents, _ := ro.ReadDir(ctx, RootInode); len(ents) != 0 {
-		t.Fatalf("an uncommitted spill is visible: %d files", len(ents))
+	if ents, _ := ro.ReadDir(ctx, RootInode); len(ents) != 100 {
+		t.Fatalf("after Flush a view of the store sees %d of 100 files", len(ents))
 	}
 }
 
@@ -240,11 +259,14 @@ func TestHeadRejectsGarbage(t *testing.T) {
 	}
 }
 
-// TestHeadNeeds: every Needs bit is unknown to this build, so every Head that sets one
-// is refused with ErrNeeds, with or without trailing fields, and one that sets none is
-// read whatever trails it.
+// TestHeadNeeds: every Needs bit but links is unknown to this build, so every Head that
+// sets one is refused with ErrNeeds, with or without trailing fields, and one that sets
+// none is read whatever trails it.
 func TestHeadNeeds(t *testing.T) {
 	for bit := range 64 {
+		if bit == tagLinks {
+			continue // known: TestLinksBitIsKnown
+		}
 		h := Head{Seq: 1, Next: 2, Needs: 1 << bit}
 		if _, err := unmarshalHead(h.marshal()); !errors.Is(err, ErrNeeds) {
 			t.Fatalf("Needs bit %d: %v, want ErrNeeds", bit, err)
@@ -405,11 +427,11 @@ func TestInodeRecordIsExtensible(t *testing.T) {
 	in := Inode{ID: 7, Mode: fs.ModeDir | 0o750, Size: 99, Mtime: now, Atime: now.Add(time.Second), Ctime: now.Add(2 * time.Second)}
 	base := encodeInode(in)
 
-	// A newer library's record: the same fields, then tags 9 and 12 this one lacks.
+	// A newer library's record: the same fields, then tags 40 and 42 this one lacks.
 	var later writer
-	later.uvarint(9)
+	later.uvarint(40)
 	later.bytes([]byte("owner=1000"))
-	later.uvarint(12)
+	later.uvarint(42)
 	later.bytes([]byte{0xff, 0x01, 0x02})
 	newer := append(append([]byte(nil), base...), later.b...)
 

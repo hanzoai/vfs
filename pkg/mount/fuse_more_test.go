@@ -182,61 +182,6 @@ func TestFUSESemantics(t *testing.T) {
 	}
 }
 
-// TestFUSEUnsupportedIsHonest: what the mount does not build answers "not supported",
-// never success. rename, symlink, link, chmod and utimens each return ENOSYS; a
-// success that changed nothing would be believed by tar, make and rsync. Unlinking an
-// open file fails its handle (no orphan inodes yet): that is a limit, not a lie, and
-// it is recorded.
-func TestFUSEUnsupportedIsHonest(t *testing.T) {
-	needFUSE(t)
-	store, mp := newMountpoint(t)
-	key, _ := age.GenerateHybridIdentity()
-	m := mountAt(t, store, mp, key, 1)
-	defer watchdog(t, m, 90*time.Second)()
-
-	p := filepath.Join(mp, "victim")
-	f, _ := os.OpenFile(p, os.O_CREATE|os.O_RDWR, 0o644)
-	f.Write([]byte("before"))
-	if err := os.Remove(p); err != nil {
-		t.Fatal(err)
-	}
-	_, werr := f.Write([]byte("after-unlink"))
-	_, serr := f.Stat()
-	buf := make([]byte, 16)
-	_, rerr := f.ReadAt(buf, 0)
-	t.Logf("write-after-unlink: write=%v fstat=%v read=%v", werr, serr, rerr)
-	f.Close()
-
-	os.WriteFile(filepath.Join(mp, "src"), []byte("x"), 0o644)
-	os.WriteFile(filepath.Join(mp, "dst"), []byte("old"), 0o644)
-	for name, err := range map[string]error{
-		"rename":  os.Rename(filepath.Join(mp, "src"), filepath.Join(mp, "dst")),
-		"symlink": os.Symlink("dst", filepath.Join(mp, "ln")),
-		"link":    os.Link(filepath.Join(mp, "dst"), filepath.Join(mp, "hard")),
-		"chmod":   os.Chmod(filepath.Join(mp, "dst"), 0o600),
-		"chtimes": os.Chtimes(filepath.Join(mp, "dst"), time.Unix(1e9, 0), time.Unix(1e9, 0)),
-	} {
-		// link(2) is the one the kernel words itself: a file system that cannot make
-		// hard links answers EPERM, which POSIX defines as exactly that.
-		if !errors.Is(err, syscall.ENOSYS) && !(name == "link" && errors.Is(err, syscall.EPERM)) {
-			t.Errorf("%s = %v, want ENOSYS", name, err)
-		}
-	}
-	// Nothing moved, nothing was made, nothing changed.
-	if b, _ := os.ReadFile(filepath.Join(mp, "dst")); string(b) != "old" {
-		t.Errorf("a refused rename changed dst to %q", b)
-	}
-	for _, n := range []string{"ln", "hard"} {
-		if _, err := os.Lstat(filepath.Join(mp, n)); err == nil {
-			t.Errorf("a refused operation left %s behind", n)
-		}
-	}
-	if fi, _ := os.Stat(filepath.Join(mp, "dst")); fi.Mode().Perm() != 0o644 {
-		t.Errorf("mode is %v after a refused chmod", fi.Mode().Perm())
-	}
-	m.Stop(t)
-}
-
 // TestFUSEHostileNames: names the kernel will pass through.
 func TestFUSEHostileNames(t *testing.T) {
 	needFUSE(t)
@@ -442,8 +387,26 @@ func TestFUSECheckout(t *testing.T) {
 
 func bytes2equal(a, b []byte) bool { return string(a) == string(b) }
 
+// writeSynced writes a file, fsyncs it and closes it: what a caller that needs the bytes to
+// survive a crash does.
+func writeSynced(name string, data []byte) error {
+	f, err := os.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
+}
+
 // TestFUSEKillDuringWrite SIGKILLs the server in the middle of a large write
-// and mounts again: everything closed before is intact, nothing torn.
+// and mounts again: everything fsynced before is intact, nothing torn.
 func TestFUSEKillDuringWrite(t *testing.T) {
 	needFUSE(t)
 	store, mp := newMountpoint(t)
@@ -451,7 +414,7 @@ func TestFUSEKillDuringWrite(t *testing.T) {
 	m := mountAt(t, store, mp, key, 1)
 	stopdog := watchdog(t, m, 90*time.Second)
 	good := rnd(1, 3<<20)
-	if err := os.WriteFile(filepath.Join(mp, "good"), good, 0o644); err != nil {
+	if err := writeSynced(filepath.Join(mp, "good"), good); err != nil {
 		t.Fatal(err)
 	}
 	f, err := os.OpenFile(filepath.Join(mp, "partial"), os.O_CREATE|os.O_WRONLY, 0o644)
@@ -647,8 +610,10 @@ func TestFUSEFileTooBig(t *testing.T) {
 	m.Stop(t)
 }
 
-// TestFUSEFsyncSurvivesKill: a file whose fsync(2) returned is in the store when the
-// server is killed with SIGKILL straight after, whether or not it was ever closed.
+// TestFUSEFsyncSurvivesKill: a file whose fsync(2) returned is in the Volume when the
+// server is killed with SIGKILL straight after, whether or not it was ever closed: the
+// next mount of the Volume on the node replays the journal and publishes it, so the store
+// has it by the time the mount is up.
 func TestFUSEFsyncSurvivesKill(t *testing.T) {
 	needFUSE(t)
 	store, mp := newMountpoint(t)
@@ -666,7 +631,7 @@ func TestFUSEFsyncSurvivesKill(t *testing.T) {
 		if _, err := f.Write(rnd(uint64(i), 20_000+i*37_000)); err != nil {
 			t.Fatal(err)
 		}
-		if err := f.Sync(); err != nil { // acknowledged: durable in the store
+		if err := f.Sync(); err != nil { // acknowledged: durable in the journal
 			t.Fatal(err)
 		}
 	}
@@ -679,13 +644,16 @@ func TestFUSEFsyncSurvivesKill(t *testing.T) {
 	_ = exec.Command("fusermount3", "-u", "-z", mp).Run()
 	time.Sleep(200 * time.Millisecond)
 
+	m2 := mountAt(t, store, mp, key, 2)
+	defer watchdog(t, m2, 60*time.Second)()
 	ro := storeView(t, store, key)
 	for i := range files {
 		got, err := storeBytes(t, ro, fmt.Sprintf("/a%02d", i))
 		if err != nil || !bytes.Equal(got, rnd(uint64(i), 20_000+i*37_000)) {
-			t.Fatalf("file a%02d, acknowledged by fsync, is not in the store after SIGKILL: %d bytes, %v", i, len(got), err)
+			t.Fatalf("file a%02d, acknowledged by fsync, is not in the store after SIGKILL and a mount: %d bytes, %v", i, len(got), err)
 		}
 	}
+	m2.Stop(t)
 }
 
 // TestFUSETermStopsAMountInUse: SIGTERM commits what the mount holds, asks for the unmount,
@@ -723,5 +691,32 @@ func TestFUSETermStopsAMountInUse(t *testing.T) {
 	got, err := storeBytes(t, storeView(t, store, key), "/held")
 	if err != nil || !bytes.Equal(got, want) {
 		t.Fatalf("a file written and never synced is not in the store after SIGTERM: %d bytes of %d, %v", len(got), len(want), err)
+	}
+}
+
+// TestFUSEStopPublishes: a file that was written and never synced or closed is in the store
+// when the mount ends with SIGTERM, which has the kernel hand over what it holds and then
+// publishes everything. Until then it was in the journal and the Volume's memory only.
+func TestFUSEStopPublishes(t *testing.T) {
+	needFUSE(t)
+	store, mp := newMountpoint(t)
+	key, _ := age.GenerateHybridIdentity()
+	m := mountAt(t, store, mp, key, 1)
+	f, err := os.OpenFile(filepath.Join(mp, "held"), os.O_CREATE|os.O_RDWR, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := rnd(77, 900_000)
+	if _, err := f.Write(want); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := storeBytes(t, storeView(t, store, key), "/held"); err == nil {
+		t.Fatal("the store has a file that nothing asked it to publish")
+	}
+	_ = f.Close()
+	m.Stop(t)
+	got, err := storeBytes(t, storeView(t, store, key), "/held")
+	if err != nil || !bytes.Equal(got, want) {
+		t.Fatalf("after the mount ended the store has %d bytes, %v; want %d", len(got), err, len(want))
 	}
 }

@@ -303,7 +303,7 @@ func TestHeadDifferentialFuzz(t *testing.T) {
 			b = mutate(r, b)
 		}
 		want := refHead(b, 0)
-		h, err := unmarshalHead(b)
+		h, err := parseHead(b, 0) // a build that knows no bit: the reference reads as one
 		got := classify(err)
 		if got != want {
 			t.Fatalf("input %x: build says %d (%v), reference says %d", b, got, err, want)
@@ -390,7 +390,7 @@ func TestHeadProduct(t *testing.T) {
 		// whole Head, with needs unknown to this build
 		plain := Head{Seq: 5, Next: 6, Needs: needs}.marshal()
 		plain = append(plain[:len(plain):len(plain)], tail...)
-		w, g := refHead(plain, 0), classify(func() error { _, e := unmarshalHead(plain); return e }())
+		w, g := refHead(plain, 0), classify(func() error { _, e := parseHead(plain, 0); return e }())
 		if w != g {
 			t.Fatalf("%s: head %x: build %d reference %d", what, plain, g, w)
 		}
@@ -440,7 +440,7 @@ func TestOneSpellingPerHead(t *testing.T) {
 		tail := randTail(r)
 		b := randHeadBytes(r, 0, tail)
 		b = mutate(r, b)
-		h, err := unmarshalHead(b)
+		h, err := parseHead(b, 0)
 		if err != nil {
 			continue
 		}
@@ -464,7 +464,7 @@ func TestTailThroughEveryDoor(t *testing.T) {
 	if err := Create(ctx, Config{Backend: be, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	cfg := Config{Backend: be, Cipher: c}
+	cfg := Config{Backend: be, Cipher: c, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk}
 	read := func() []byte {
 		raw := be.Dump()["head"]
 		plain, err := unseal(c, headAAD(be.String()), raw[30:])
@@ -474,7 +474,7 @@ func TestTailThroughEveryDoor(t *testing.T) {
 		return plain
 	}
 	h, _ := unmarshalHead(read())
-	tail := tlv(1, "a") + tlv(2, "") + tlv(3, string(bytes.Repeat([]byte{7}, 200))) + tlv(63, "z") + tlv(64, "y") + tlv(1<<63, "x") + tlv(1<<64-1, "w")
+	tail := tlv(1, "a") + tlv(2, "") + tlv(3, string(bytes.Repeat([]byte{7}, 200))) + tlv(63, "z") + tlv(65, "y") + tlv(1<<63, "x") + tlv(1<<64-1, "w")
 	h.Seq, h.Journal, h.Tail = 3, 99, tail
 	sealed, err := seal(c, headAAD(be.String()), h.marshal())
 	if err != nil {
@@ -496,7 +496,7 @@ func TestTailThroughEveryDoor(t *testing.T) {
 			t.Fatal(err)
 		}
 		got, err := unmarshalHead(read())
-		if err != nil || got.Tail != tail || got.Journal != 99 || got.Needs != 0 || got.ID != h.ID || got.Seed != h.Seed {
+		if err != nil || dropUsage(got.Tail) != tail || got.Journal != 99+uint64(i)+1 || got.Needs != 0 || got.ID != h.ID || got.Seed != h.Seed {
 			t.Fatalf("commit %d: %v tail kept=%v", i, err, got.Tail == tail)
 		}
 	}
@@ -505,7 +505,7 @@ func TestTailThroughEveryDoor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := unmarshalHead(read()); got.Tail != tail {
+	if got, _ := unmarshalHead(read()); dropUsage(got.Tail) != tail {
 		t.Fatal("takeover changed the tail")
 	}
 	// the fenced writer's next commit must not rewrite the tail either way
@@ -527,7 +527,7 @@ func TestTailThroughEveryDoor(t *testing.T) {
 	if a != b {
 		t.Fatalf("reseal changed the Head: %+v vs %+v", a, b)
 	}
-	if b.Tail != tail {
+	if dropUsage(b.Tail) != tail {
 		t.Fatal("reseal lost the tail")
 	}
 	_ = v2
@@ -543,7 +543,7 @@ func FuzzHead(f *testing.F) {
 	f.Add(Head{Seq: 1, Next: 2}.marshal())
 	f.Fuzz(func(t *testing.T, b []byte) {
 		want := refHead(b, 0)
-		h, err := unmarshalHead(b)
+		h, err := parseHead(b, 0) // a build that knows no bit: the reference reads as one
 		if got := classify(err); got != want {
 			t.Fatalf("input %x: build %d (%v) reference %d", b, got, err, want)
 		}
@@ -604,9 +604,10 @@ func TestNeedsAndTailAreSealed(t *testing.T) {
 	t.Logf("%d sealed bytes x 2 flips: every one refused", len(rec)-30)
 }
 
-// a commit carries Needs, the Tail and the Journal of the Head it read, byte for byte. This build cannot
-// open a Volume whose Needs is not 0, so the Head is planted in the Volume's memory and the plaintext it commits is
-// decoded by hand: the first build that knows a bit relies on exactly this.
+// a commit carries Needs and the Tail of the Head it read, byte for byte, and writes the journal's
+// sequence. This build cannot open a Volume whose Needs is not 0, so the Head is planted in the
+// Volume's memory and the plaintext it commits is decoded by hand: the first build that knows a bit
+// relies on exactly this.
 func TestCommitCarriesNeedsAndTail(t *testing.T) {
 	ctx := context.Background()
 	be := storetest.NewMem()
@@ -615,13 +616,13 @@ func TestCommitCarriesNeedsAndTail(t *testing.T) {
 	if err := Create(ctx, Config{Backend: be, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	v, err := Attach(ctx, Config{Backend: be, Cipher: c, Round: 1})
+	v, err := Attach(ctx, Config{Backend: be, Cipher: c, Round: 1, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk})
 	if err != nil {
 		t.Fatal(err)
 	}
 	tail := tlv(3, "layer") + tlv(70, "hint")
 	v.mu.Lock()
-	v.head.Needs, v.head.Tail, v.head.Journal = 1<<3, tail, 17
+	v.head.Needs, v.head.Tail = 1<<3, tail
 	v.mu.Unlock()
 	if _, err := v.Create(ctx, RootInode, "f", 0o644); err != nil {
 		t.Fatal(err)
@@ -648,8 +649,8 @@ func TestCommitCarriesNeedsAndTail(t *testing.T) {
 	b = b[48:]
 	journal := next()
 	needs := next()
-	if journal != 17 || needs != 1<<3 || string(b) != tail {
-		t.Fatalf("a commit wrote journal=%d needs=%#x tail=%q; it read 17, 8 and %q", journal, needs, b, tail)
+	if journal != 1 || needs != 1<<3 || dropUsage(string(b)) != tail {
+		t.Fatalf("a commit wrote journal=%d needs=%#x tail=%q; it read 1, 8 and %q", journal, needs, b, tail)
 	}
 }
 

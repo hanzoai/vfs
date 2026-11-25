@@ -10,6 +10,7 @@ require (
 	github.com/luxfi/age v1.6.0
 	github.com/spf13/cobra v1.10.2
 	github.com/zeebo/blake3 v0.2.4
+	golang.org/x/sys v0.46.0
 	lukechampine.com/blake3 v1.4.1
 )
 
@@ -39,7 +40,6 @@ require (
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
 	golang.org/x/crypto v0.52.0 // indirect
 	golang.org/x/net v0.54.0 // indirect
-	golang.org/x/sys v0.46.0 // indirect
 	golang.org/x/text v0.37.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )

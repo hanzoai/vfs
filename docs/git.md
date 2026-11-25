@@ -8,11 +8,12 @@ run without downloading the repository again, and lists what the forge should
 change. The runner is `tools/gitbench`; every number below can be regenerated
 with it (section 9), on a local disk, on tmpfs, or on a mounted volume.
 
-The mount cannot run git yet: a rename returns an error until the POSIX
-operations of issue #28 land. The measurements are therefore on a local NVMe
-disk and on tmpfs, and the benchmark prints the system calls that a volume
-would be charged for, so the mount's number can be computed before it can be
-measured and checked as soon as it can.
+The measurements are on a local NVMe disk and on tmpfs, and the benchmark
+prints the system calls that a volume would be charged for, so the mount's
+number can be computed before it is measured. The mount runs git since the
+POSIX operations of issue #28 (rename, links, attributes, directory times):
+`git clone --depth 1`, `add`, `commit`, `checkout`, `status`, `gc` and `fsck` give
+the trees that tmpfs gives, and `tools/gitbench` runs on it.
 
 Refs #29.
 

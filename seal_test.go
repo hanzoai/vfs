@@ -181,7 +181,7 @@ func TestResealRefusesTheLastRound(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := be.Dump()["head"]
-	if err := Reseal(ctx, Config{Backend: be, Cipher: c, Round: math.MaxUint64}, be.String()); err == nil {
+	if err := Reseal(ctx, Config{Backend: be, Cipher: c, Round: math.MaxUint64, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk}, be.String()); err == nil {
 		t.Error("Reseal at 2^64-1 succeeded: no writer can attach to that Volume again")
 	}
 	if !bytes.Equal(be.Dump()["head"], before) {
@@ -207,7 +207,7 @@ func TestResealRefusesAGarbageHead(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := be.Dump()["head"]
-	if err := Reseal(ctx, Config{Backend: be, Cipher: c, Round: 5}, be.String()); err == nil {
+	if err := Reseal(ctx, Config{Backend: be, Cipher: c, Round: 5, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk}, be.String()); err == nil {
 		t.Error("Reseal sealed a Head that does not decode")
 	}
 	if !bytes.Equal(be.Dump()["head"], before) {

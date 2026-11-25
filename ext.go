@@ -8,8 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 
-	"github.com/zeebo/blake3"
-
+	"github.com/hanzoai/vfs/internal/blake3"
 	"github.com/hanzoai/vfs/pkg/backend"
 )
 
@@ -62,7 +61,7 @@ func validExtName(name string) error {
 func extRest(seed [32]byte, name string, key []byte) string {
 	var k [32]byte
 	blake3.DeriveKey("hanzoai/vfs extension names", seed[:], k[:])
-	h, _ := blake3.NewKeyed(k[:])
+	h := blake3.Keyed(&k)
 	_, _ = h.Write(binary.AppendUvarint(nil, uint64(len(name))))
 	_, _ = h.WriteString(name)
 	_, _ = h.Write(key)

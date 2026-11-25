@@ -163,17 +163,6 @@ func TestFUSEInterruptsAreNotErrors(t *testing.T) {
 		t.Fatalf("only %d fsyncs in %v: the mount hangs, or is too slow to say that signals do no harm", synced.Load(), signalHard)
 	}
 
-	// What was acknowledged is in the store, read from outside the mount.
-	ro := storeView(t, store, key)
-	for w := range 2 {
-		for _, i := range []int{0, int(last[w].Load()) - 1} {
-			got, err := storeBytes(t, ro, fmt.Sprintf("/s%d-%05d", w, i))
-			if err != nil || string(got) != string(rnd(uint64(w*100000+i), 4096)) {
-				t.Fatalf("file s%d-%05d: %d bytes, %v", w, i, len(got), err)
-			}
-		}
-	}
-
 	// Sequential reads of a 256 MiB file, 1 MiB at a time, over and over.
 	const block, blocks = 1 << 20, 256
 	path := filepath.Join(mp, "big")
@@ -250,4 +239,15 @@ func TestFUSEInterruptsAreNotErrors(t *testing.T) {
 	}
 	sig.close()
 	m.Stop(t)
+
+	// What was acknowledged is in the store, read from outside the mount.
+	ro := storeView(t, store, key)
+	for w := range 2 {
+		for _, i := range []int{0, int(last[w].Load()) - 1} {
+			got, err := storeBytes(t, ro, fmt.Sprintf("/s%d-%05d", w, i))
+			if err != nil || string(got) != string(rnd(uint64(w*100000+i), 4096)) {
+				t.Fatalf("file s%d-%05d: %d bytes, %v", w, i, len(got), err)
+			}
+		}
+	}
 }

@@ -4,7 +4,6 @@ package mount_test
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"github.com/hanzoai/vfs/internal/mounttest"
 	"os"
@@ -13,20 +12,15 @@ import (
 	"testing"
 
 	"github.com/luxfi/age"
-
-	"github.com/hanzoai/vfs"
-	"github.com/hanzoai/vfs/pkg/backend"
-	_ "github.com/hanzoai/vfs/pkg/backend/file"
-	_ "github.com/hanzoai/vfs/pkg/backend/s3"
 )
 
 // TestMountChild is the server process of the mount tests: the test binary run again
 // (see internal/mounttest).
 func TestMountChild(t *testing.T) { mounttest.Child(t) }
 
-// TestFUSEPOSIX drives every operation the mount supports through the kernel,
-// and checks that Fsync and Flush reach the store: a second, read-only view of the
-// store sees the file before the mount is released.
+// TestFUSEPOSIX drives every operation the mount supports through the kernel, and checks
+// that fsync is the journal's: it returns with the store knowing nothing of the file, and
+// the store has the file once the mount is released.
 func TestFUSEPOSIX(t *testing.T) {
 	needFUSE(t)
 	store, mp := newMountpoint(t)
@@ -45,17 +39,8 @@ func TestFUSEPOSIX(t *testing.T) {
 	if _, err := f.Write(data); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.Sync(); err != nil { // Fsync: durable in the store on return
+	if err := f.Sync(); err != nil { // fsync: durable in this node's journal on return
 		t.Fatal(err)
-	}
-	be, _ := backend.Open(context.Background(), "file://"+store)
-	ro, err := vfs.Open(context.Background(), vfs.Config{Backend: be, Cipher: vfs.Hybrid(key)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	in, err := ro.Resolve(context.Background(), "/dir/file.bin")
-	if err != nil || in.Size != uint64(len(data)) {
-		t.Fatalf("after fsync a second view sees %+v, %v; want %d bytes", in, err, len(data))
 	}
 	if err := f.Close(); err != nil {
 		t.Fatal(err)

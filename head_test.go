@@ -34,8 +34,9 @@ func tlv(tag uint64, value string) string {
 	return string(binary.AppendUvarint(binary.AppendUvarint(nil, tag), uint64(len(value)))) + value
 }
 
-// The journal sequence, the bits and the tail that a Head carried are the ones the next
-// commit writes: a build that does not change them does not lose them.
+// The bits and the tail that a Head carried are the ones the next commit writes: a build
+// that does not change them does not lose them. The journal sequence is the journal's: the
+// first change of the first generation is number 1.
 func TestHeadFieldsSurviveACommit(t *testing.T) {
 	ctx := context.Background()
 	be := storetest.NewMem()
@@ -44,12 +45,12 @@ func TestHeadFieldsSurviveACommit(t *testing.T) {
 	if err := Create(ctx, Config{Backend: be, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	v, err := Attach(ctx, Config{Backend: be, Cipher: c, Round: 1})
+	v, err := Attach(ctx, Config{Backend: be, Cipher: c, Round: 1, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk})
 	if err != nil {
 		t.Fatal(err)
 	}
 	v.mu.Lock()
-	v.head.Journal, v.head.Tail = 41, tlv(40, "a field")+tlv(41, "of a later")+tlv(1<<40, "build")
+	v.head.Tail = tlv(40, "a field") + tlv(41, "of a later") + tlv(1<<40, "build")
 	v.mu.Unlock()
 	if _, err := v.Create(ctx, RootInode, "f", 0o644); err != nil {
 		t.Fatal(err)
@@ -61,7 +62,7 @@ func TestHeadFieldsSurviveACommit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.head.Journal != 41 || r.head.Tail != tlv(40, "a field")+tlv(41, "of a later")+tlv(1<<40, "build") {
+	if r.head.Journal != 1 || dropUsage(r.head.Tail) != tlv(40, "a field")+tlv(41, "of a later")+tlv(1<<40, "build") {
 		t.Fatalf("after a commit the Head has Journal %d, Tail %q", r.head.Journal, r.head.Tail)
 	}
 }
@@ -84,7 +85,9 @@ func TestHeadOfALaterBuildIsRefusedByEveryDoor(t *testing.T) {
 		t.Fatal(err)
 	}
 	before := be.Dump()["head"]
-	cfg := func(round uint64) Config { return Config{Backend: be, Cipher: c, Round: round} }
+	cfg := func(round uint64) Config {
+		return Config{Backend: be, Cipher: c, Round: round, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk}
+	}
 	if _, err := Open(ctx, cfg(0)); !errors.Is(err, ErrNeeds) {
 		t.Errorf("Open = %v", err)
 	}
@@ -100,4 +103,23 @@ func TestHeadOfALaterBuildIsRefusedByEveryDoor(t *testing.T) {
 	if !bytes.Equal(be.Dump()["head"], before) {
 		t.Error("a refused door changed the Head")
 	}
+}
+
+// dropUsage returns tail without the usage field, which every commit writes: what the test
+// put in is what a commit must carry unchanged beside it.
+func dropUsage(tail string) string {
+	var out string
+	r := reader{b: []byte(tail)}
+	for len(r.b) > 0 {
+		start := r.b
+		tag := r.uvarint()
+		r.bytes()
+		if r.err != nil {
+			return tail
+		}
+		if tag != tagUsage {
+			out += string(start[:len(start)-len(r.b)])
+		}
+	}
+	return out
 }

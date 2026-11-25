@@ -536,9 +536,14 @@ on another architecture these tests fail, they do not skip.
 
 ## Integration with the Volume
 
-This change does not touch the Volume. The records are opaque bytes: the Volume
-chooses the encoding of a mutation, the journal only orders, stores and numbers it.
-The surface the integration change calls:
+The Volume uses the journal as of the change that wired it in (`volume.go`, `change.go`,
+`ledger.go`, `generation.go`; the text of what it guarantees is `docs/SPECIFICATION.md` section 8).
+Items 1 to 7, 10 to 12, 14 and 15 below are done. Items 8, 9 and 13, the bulk payloads that bypass
+the ordered log, are not: every payload goes through the one log, so a small fsync waits behind
+the bulk written before it, and the journal should not carry a disk of the SATA class until they
+are. The records are opaque bytes: the Volume chooses the encoding of a mutation (`change.go`: a
+write, a size, a set of tree records), seals it with a key of the journal's own, and the journal
+only orders, stores and numbers it. The surface the Volume calls:
 
 ```go
 j, err := journal.Open(dir, journal.Options{Capacity: budget, Published: head, Lineage: volumeAndRound})

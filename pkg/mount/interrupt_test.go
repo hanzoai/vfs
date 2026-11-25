@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"syscall"
@@ -109,19 +108,19 @@ func testVolume(t *testing.T) (*gate, *vfs.Volume, vfs.Cipher, *storetest.Mem) {
 	if err := vfs.Create(bg, vfs.Config{Backend: g, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	v, err := vfs.Attach(bg, vfs.Config{Backend: g, Cipher: c, Round: 1})
+	v, err := vfs.Attach(bg, vfs.Config{Backend: g, Cipher: c, Round: 1, Journal: storetest.Journals(), JournalCapacity: 64 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
 	return g, v, c, mem
 }
 
-// TestFsyncWaitsForItsCommit: fsync(2) answered EINTR is an error to SQLite and to C
-// callers, which do not restart it, and the kernel does not restart a FUSE request that
-// was answered EINTR. So an interrupt that reaches a commit asked for by an fsync does
-// not end the wait: the caller gets the commit's own result, and the commit, which runs
-// on a context of its own, lands.
-func TestFsyncWaitsForItsCommit(t *testing.T) {
+// TestFsyncWaitsForTheJournalAndNothingElse: fsync(2) answered EINTR is an error to SQLite and
+// to C callers, which do not restart it, and the kernel does not restart a FUSE request that
+// was answered EINTR. So an interrupt does not end the wait. What it waits for is the journal
+// on this node's disk: with the store stalled on the Head, fsync returns at once, whether or
+// not it was interrupted, and the data reaches the store when the store answers.
+func TestFsyncWaitsForTheJournalAndNothingElse(t *testing.T) {
 	g, v, c, mem := testVolume(t)
 	bg := context.Background()
 	in, err := v.Create(bg, vfs.RootInode, "f", 0o644)
@@ -134,39 +133,32 @@ func TestFsyncWaitsForItsCommit(t *testing.T) {
 	}
 	defer f.Close()
 	defer g.free()
+	g.armed.Store(true) // the store stops answering on the first Head write
 	if _, err := f.WriteAt(bg, make([]byte, 200_000), 0); err != nil {
 		t.Fatal(err)
 	}
-	n := newSession(bg, v).node(in.ID, vfs.RootInode)
-
-	g.armed.Store(true)
+	n := newSession(bg, v).node(in.ID)
 	req, interrupt := context.WithCancel(bg)
+	interrupt() // the kernel's FUSE_INTERRUPT arrived before the daemon looked
 	result := make(chan error, 1)
 	go func() { result <- n.Fsync(req, &fuse.FsyncRequest{}) }()
-	select {
-	case <-g.reached:
-	case <-time.After(20 * time.Second):
-		t.Fatal("the commit never reached the Head")
-	}
-	interrupt() // the kernel's FUSE_INTERRUPT: the request's context ends mid-PUT
-	select {
-	case err := <-result:
-		t.Fatalf("fsync was answered (%v) while its commit was still being written", err)
-	case <-time.After(300 * time.Millisecond):
-	}
-	g.free() // the store answers
 	select {
 	case err := <-result:
 		if err != nil {
 			t.Fatalf("fsync after an interrupt: %v", err)
 		}
 	case <-time.After(20 * time.Second):
-		t.Fatal("fsync never returned")
+		t.Fatal("fsync waits for the store")
 	}
-	select {
-	case <-g.landed:
-	default:
-		t.Fatal("fsync returned before the Head landed")
+	if st := v.State(); st.Durable < st.Visible {
+		t.Fatalf("fsync returned and the journal is not durable: %+v", st)
+	}
+	if _, err := vfs.Open(bg, vfs.Config{Backend: mem, Cipher: c}); err != nil {
+		t.Fatal(err)
+	}
+	g.free() // the store answers
+	if err := v.Flush(bg); err != nil {
+		t.Fatal(err)
 	}
 	ro, err := vfs.Open(bg, vfs.Config{Backend: mem, Cipher: c})
 	if err != nil {
@@ -174,15 +166,14 @@ func TestFsyncWaitsForItsCommit(t *testing.T) {
 	}
 	got, err := ro.Resolve(bg, "/f")
 	if err != nil || got.Size != 200_000 {
-		t.Fatalf("the commit did not land whole: %+v %v", got, err)
+		t.Fatalf("the write did not reach the store whole: %+v %v", got, err)
 	}
 }
 
-// TestCloseWaitsForItsCommit: close(2) is not restarted after EINTR (Linux has dropped
-// the descriptor and Go's os.File.Close hands the error to its caller), so an
-// interrupt that reaches a commit asked for by a close does not end the wait: the
-// caller gets the commit's own result.
-func TestCloseWaitsForItsCommit(t *testing.T) {
+// TestCloseAsksForNothing: close(2) reaches the daemon as a flush of the descriptor. It makes
+// no request of the store and does not wait for one, whatever the descriptor wrote and
+// whatever the store is doing; the writes are published by the Volume within its bound.
+func TestCloseAsksForNothing(t *testing.T) {
 	g, v, _, _ := testVolume(t)
 	bg := context.Background()
 	in, err := v.Create(bg, vfs.RootInode, "f", 0o644)
@@ -199,30 +190,21 @@ func TestCloseWaitsForItsCommit(t *testing.T) {
 	defer f.Close()
 	defer g.free()
 	h := newSession(bg, v).handle(f)
-
 	g.armed.Store(true)
-	req, interrupt := context.WithCancel(bg)
-	result := make(chan error, 1)
-	go func() { result <- h.Flush(req, &fuse.FlushRequest{}) }()
+	done := make(chan error, 1)
+	go func() { done <- h.Flush(bg, &fuse.FlushRequest{}) }()
 	select {
-	case <-g.reached:
-	case <-time.After(20 * time.Second):
-		t.Fatal("the commit never reached the Head")
-	}
-	interrupt()
-	select {
-	case err := <-result:
-		t.Fatalf("close was answered (%v) while its commit was still being written", err)
-	case <-time.After(300 * time.Millisecond):
-	}
-	g.free()
-	select {
-	case err := <-result:
+	case err := <-done:
 		if err != nil {
-			t.Fatalf("close after an interrupt: %v", err)
+			t.Fatalf("close: %v", err)
 		}
 	case <-time.After(20 * time.Second):
-		t.Fatal("close never returned")
+		t.Fatal("close waits for the store")
+	}
+	select {
+	case <-g.reached:
+		t.Fatal("close made the store a request")
+	default:
 	}
 }
 
@@ -299,12 +281,10 @@ func TestReadWaitsForItsData(t *testing.T) {
 	}
 }
 
-// TestFsyncCallersShareTwoCommits: thousands of callers of fsync against a store that
-// has stopped answering share the commits: one runs and one waits to start, however
-// many callers arrive. When the store answers every caller is told the result of a
-// commit that began after it called, and the store has seen a few Head writes, not one
-// for each caller.
-func TestFsyncCallersShareTwoCommits(t *testing.T) {
+// TestFsyncCallersDoNotTouchTheStore: thousands of callers of fsync against a store that has
+// stopped answering are all answered by the journal, together, and the store sees nothing of
+// them; the writes are in the store when it answers again.
+func TestFsyncCallersDoNotTouchTheStore(t *testing.T) {
 	g, v, c, mem := testVolume(t)
 	bg := context.Background()
 	in, err := v.Create(bg, vfs.RootInode, "f", 0o644)
@@ -320,27 +300,13 @@ func TestFsyncCallersShareTwoCommits(t *testing.T) {
 	if _, err := f.WriteAt(bg, make([]byte, 100_000), 0); err != nil {
 		t.Fatal(err)
 	}
-	cm := newCommitter(v)
 	g.armed.Store(true)
+	n := newSession(bg, v).node(in.ID)
 	const callers = 3000
 	results := make(chan error, callers)
-	base := runtime.NumGoroutine()
-	go func() { results <- cm.commit() }()
-	select {
-	case <-g.reached:
-	case <-time.After(20 * time.Second):
-		t.Fatal("the commit never reached the Head")
+	for range callers {
+		go func() { results <- n.Fsync(bg, &fuse.FsyncRequest{}) }()
 	}
-	for range callers - 1 {
-		go func() { results <- cm.commit() }()
-	}
-	time.Sleep(200 * time.Millisecond) // let them arrive
-	// The callers wait, and nothing else does: a commit started for each of them would
-	// double the goroutines parked behind the stalled store.
-	if extra := runtime.NumGoroutine() - base; extra > callers+50 {
-		t.Fatalf("%d goroutines for %d callers of fsync against a stalled store: commits pile up", extra, callers)
-	}
-	g.free()
 	for range callers {
 		select {
 		case err := <-results:
@@ -351,15 +317,16 @@ func TestFsyncCallersShareTwoCommits(t *testing.T) {
 			t.Fatal("a caller never returned")
 		}
 	}
+	g.free()
+	if err := v.Flush(bg); err != nil {
+		t.Fatal(err)
+	}
 	ro, err := vfs.Open(bg, vfs.Config{Backend: mem, Cipher: c})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got, err := ro.Resolve(bg, "/f"); err != nil || got.Size != 100_000 {
 		t.Fatalf("the write is not in the store: %+v %v", got, err)
-	}
-	if heads := mem.Puts()["head"]; heads > 4 {
-		t.Fatalf("%d Head writes for %d callers", heads, callers)
 	}
 }
 
@@ -403,11 +370,11 @@ func TestLookedUpFileReadsOnTheMountContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	// A fresh server over the same store: nothing cached.
-	v2, err := vfs.Attach(bg, vfs.Config{Backend: storetest.Strict{Backend: mem}, Cipher: c, Round: 2})
+	v2, err := vfs.Attach(bg, vfs.Config{Backend: storetest.Strict{Backend: mem}, Cipher: c, Round: 2, Journal: storetest.Journals(), JournalCapacity: 64 << 20})
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := newSession(bg, v2).node(vfs.RootInode, vfs.RootInode)
+	root := newSession(bg, v2).node(vfs.RootInode)
 	// What the kernel does for open("/f"): LOOKUP, OPEN, READ.
 	found, err := root.Lookup(bg, "f")
 	if err != nil {

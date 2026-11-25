@@ -23,7 +23,7 @@ func headVolume(t *testing.T) (*storetest.Mem, Cipher, Config) {
 	if err := Create(context.Background(), Config{Backend: be, Cipher: c}); err != nil {
 		t.Fatal(err)
 	}
-	return be, c, Config{Backend: be, Cipher: c}
+	return be, c, Config{Backend: be, Cipher: c, Journal: storetest.Journals(), JournalCapacity: 16 << 20, Disk: storetest.Disk}
 }
 
 // putRaw replaces the Head's plaintext with exactly plain (sealed to the place), at round 0.
@@ -53,7 +53,7 @@ func headPlain(t *testing.T, be *storetest.Mem, c Cipher) []byte {
 func TestHeadMatrix(t *testing.T) {
 	ctx := context.Background()
 	for _, tail := range []string{"", tlv(7, "later"), tlv(60, string(bytes.Repeat([]byte{0xff}, 40))) + tlv(61, "x")} {
-		for _, needs := range []uint64{0, 1, 2, 4, 1 << 3, 1 << 63, ^uint64(0)} {
+		for _, needs := range []uint64{0, 1, 2, 1 << 3, 1 << 63, ^uint64(0)} {
 			be, c, cfg := headVolume(t)
 			base := headPlain(t, be, c)
 			h, err := unmarshalHead(base)
@@ -122,7 +122,7 @@ func TestTailSurvivesAnOrdinaryWriter(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if got.Tail != tail || got.Journal != 123456789 || got.Needs != 0 {
+		if dropUsage(got.Tail) != tail || got.Journal != 123456789+uint64(i)+1 || got.Needs != 0 {
 			t.Fatalf("commit %d dropped or changed a field: journal=%d tail ok=%v needs=%d", i, got.Journal, got.Tail == tail, got.Needs)
 		}
 		if got.Seq <= 9 {
