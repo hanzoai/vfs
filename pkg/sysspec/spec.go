@@ -878,6 +878,37 @@ func fenceModule() ModuleSpec {
 	}
 }
 
+// Known Head.Tail tags defined by SPECIFICATION 5.1 (namespace.go):
+// tag 2 (links, announced by Needs bit 2) and tag 64 (usage counters stamped on commit).
+// All other tags are unknown fields and must be preserved byte-for-byte across commits.
+const (
+	headTailTagLinks uint64 = 2
+	headTailTagUsage uint64 = 64
+)
+
+func unknownHeadTail(tail string) string {
+	b := []byte(tail)
+	var out []byte
+	for len(b) > 0 {
+		start := b
+		tag, n := binary.Uvarint(b)
+		if n <= 0 {
+			return tail
+		}
+		b = b[n:]
+		ln, n := binary.Uvarint(b)
+		if n <= 0 || ln > uint64(len(b[n:])) {
+			return tail
+		}
+		b = b[n+int(ln):]
+		field := start[:len(start)-len(b)]
+		if tag != headTailTagLinks && tag != headTailTagUsage {
+			out = append(out, field...)
+		}
+	}
+	return string(out)
+}
+
 func publicationModule() ModuleSpec {
 	return ModuleSpec{
 		Domain:    DomainPublication,
@@ -970,10 +1001,10 @@ func publicationModule() ModuleSpec {
 					if b.Seed != ([32]byte{}) && c.Seed != b.Seed {
 						return "commit/takeover altered Volume Seed"
 					}
-					if c.Needs != b.Needs {
+					if b.Needs&^c.Needs != 0 {
 						return fmt.Sprintf("commit/takeover dropped Head.Needs (%#x -> %#x)", b.Needs, c.Needs)
 					}
-					if c.Tail != b.Tail {
+					if unknownHeadTail(c.Tail) != unknownHeadTail(b.Tail) {
 						return "commit/takeover altered or dropped Head.Tail"
 					}
 					if c.Next < b.Next {
