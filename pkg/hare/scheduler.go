@@ -15,8 +15,13 @@
 // working sets and trigger global journal slowdowns), HARE jointly allocates
 // cache by online marginal miss-bandwidth reduction (Miss-Ratio Curve) and
 // schedules worker slots, journal bytes, and S3 network tokens via start-time
-// fair queuing (SFQ) with publication-deadline boost (<= 5 s bound), using
-// caller/injected clocks and zero background polling goroutines.
+// fair queuing (SFQ) with bounded publication-deadline boost (<= 5 s bound),
+// using caller/injected clocks and zero background polling goroutines.
+//
+// HARE complements — and never replaces — the canonical VFS v2 journal and
+// publication bound: callers feed real Volume.State() backlog and age into
+// ObserveJournalState while TenantBackend schedules S3 operations through
+// Scheduler.Acquire.
 package hare
 
 import (
@@ -31,7 +36,8 @@ import (
 
 const (
 	ghostRingSize   = 256
-	mrcBuckets      = 16
+	mrcBuckets      = 64
+	mrcWindowDecay  = 512
 	minTenantWeight = 1
 )
 
@@ -120,75 +126,116 @@ type TenantAllocation struct {
 	ActiveWorkers   int
 	Hits            uint64
 	Misses          uint64
+	Evictions       uint64
 	BytesMoved      uint64
 	ThrottleMicros  uint64
 	MarginalUtility float64
 }
 
-type ghostEntry struct {
-	blockKey uint64
-	stamp    uint64
-}
-
-// mrcTracker estimates a tenant's reuse distance distribution in O(1) per
-// access using a fixed-size ghost ring buffer over 64 KiB logical blocks.
+// mrcTracker estimates a tenant's exact Mattson stack reuse-distance
+// distribution over a fixed 256-block ghost LRU stack (zero heap allocations
+// per access, periodic sliding-window halving so idle-to-active and phase
+// shifts adapt rapidly).
 type mrcTracker struct {
-	accessSeq uint64
-	ring      [ghostRingSize]ghostEntry
-	ringPos   int
-	index     map[uint64]uint64
-	distHist  [mrcBuckets]uint64
-	hits      uint64
-	misses    uint64
+	lru          [ghostRingSize]uint64
+	lruLen       int
+	distHist     [mrcBuckets]uint64
+	windowHits   uint64
+	windowMisses uint64
+	hits         uint64
+	misses       uint64
+	evictions    uint64
 }
 
 func newMRCTracker() mrcTracker {
-	return mrcTracker{index: make(map[uint64]uint64, ghostRingSize)}
+	return mrcTracker{}
 }
 
 func (m *mrcTracker) observe(blockKey uint64, cacheBlocks int64) (hit bool) {
-	m.accessSeq++
-	prev, ok := m.index[blockKey]
-	if ok {
-		dist := m.accessSeq - prev
-		bucket := min(int(dist/4), mrcBuckets-1)
+	capBlocks := max(int64(1), cacheBlocks)
+	pos := -1
+	for i := 0; i < m.lruLen; i++ {
+		if m.lru[i] == blockKey {
+			pos = i
+			break
+		}
+	}
+	if pos >= 0 {
+		// Exact distinct-block reuse distance (Mattson stack distance, 1-based).
+		dist := pos + 1
+		if pos > 0 {
+			copy(m.lru[1:pos+1], m.lru[0:pos])
+			m.lru[0] = blockKey
+		}
+		bucket := min((dist-1)/4, mrcBuckets-1)
 		m.distHist[bucket]++
-		if int64(dist) <= max(1, cacheBlocks) {
+		if int64(dist) <= capBlocks {
 			hit = true
 			m.hits++
+			m.windowHits++
 		} else {
 			m.misses++
+			m.windowMisses++
+			m.evictions++
 		}
 	} else {
 		m.misses++
+		m.windowMisses++
+		if int64(m.lruLen) >= capBlocks {
+			m.evictions++
+		}
+		if m.lruLen < ghostRingSize {
+			copy(m.lru[1:m.lruLen+1], m.lru[0:m.lruLen])
+			m.lru[0] = blockKey
+			m.lruLen++
+		} else {
+			copy(m.lru[1:], m.lru[:ghostRingSize-1])
+			m.lru[0] = blockKey
+		}
 	}
 
-	evict := m.ring[m.ringPos]
-	if evict.stamp != 0 && m.index[evict.blockKey] == evict.stamp {
-		delete(m.index, evict.blockKey)
+	if m.windowHits+m.windowMisses >= mrcWindowDecay {
+		for i := range m.distHist {
+			m.distHist[i] >>= 1
+		}
+		m.windowHits >>= 1
+		m.windowMisses >>= 1
 	}
-	m.ring[m.ringPos] = ghostEntry{blockKey: blockKey, stamp: m.accessSeq}
-	m.ringPos = (m.ringPos + 1) % ghostRingSize
-	m.index[blockKey] = m.accessSeq
 	return hit
 }
 
-// marginalGain estimates miss-rate reduction if this tenant receives extra
-// cache blocks beyond currentBlocks. Pure streaming/scan workloads have near-zero
-// reuse inside ghostRingSize and therefore return ~0, preventing cache pollution.
-func (m *mrcTracker) marginalGain(currentBlocks int64) float64 {
-	total := m.hits + m.misses
-	if total < 8 {
-		return 1.0
+// cacheUtility estimates the cache benefit a tenant gains from holding elastic
+// cache above floorBlocks.
+//   - Completely idle tenants (0 window accesses) return 0 so they do not hoard
+//     elastic cache away from active tenants.
+//   - Newly waking tenants (< 8 accesses, no reuse observed yet) receive a
+//     small warm-up probe utility so idle-to-active bursts ramp quickly.
+//   - Confirmed zero-reuse scans/streams return 0.
+//   - Interactive tenants with reuse inside or above floorBlocks return utility
+//     weighted strongly toward hits above floorBlocks that would be evicted if
+//     shrunk to the scan-resistant floor.
+func (m *mrcTracker) cacheUtility(floorBlocks int64) float64 {
+	total := m.windowHits + m.windowMisses
+	if total == 0 {
+		return 0.0
 	}
-	curBucket := min(max(int(currentBlocks/4), 0), mrcBuckets-1)
-	nextBucket := min(curBucket+3, mrcBuckets)
-	var capturable uint64
-	for b := curBucket; b < nextBucket; b++ {
-		capturable += m.distHist[b]
+	floorBucket := min(max(int(floorBlocks/4), 0), mrcBuckets-1)
+	var aboveFloor, totalReuse uint64
+	for b := 0; b < mrcBuckets; b++ {
+		totalReuse += m.distHist[b]
+		if b >= floorBucket {
+			aboveFloor += m.distHist[b]
+		}
 	}
-	// Smooth Laplace prior keeps lightly active interactive sandboxes responsive.
-	return float64(capturable) / float64(total+16)
+	if totalReuse == 0 {
+		if total < 8 {
+			return 0.15
+		}
+		return 0.0
+	}
+	aboveRate := float64(aboveFloor) / float64(total+8)
+	reuseRate := float64(totalReuse) / float64(total+8)
+	return 0.75*aboveRate + 0.25*reuseRate
 }
 
 type tenantState struct {
@@ -216,6 +263,7 @@ type sfqWaiter struct {
 	tenantID string
 	startTag float64
 	urgent   bool
+	removed  bool
 	ready    chan struct{}
 }
 
@@ -242,12 +290,13 @@ func (tk *Ticket) Done() {
 type Scheduler struct {
 	cfg NodeConfig
 
-	mu          sync.Mutex
-	tenants     map[string]*tenantState
-	totalWeight int
-	virtualTime float64
-	inFlight    int
-	waitQueue   []*sfqWaiter
+	mu           sync.Mutex
+	tenants      map[string]*tenantState
+	totalWeight  int
+	virtualTime  float64
+	inFlight     int
+	urgentStreak int
+	waitQueue    []*sfqWaiter
 
 	// Aggregate node token bucket for S3 network shaping (updated lazily on Now()).
 	nodeTokens float64
@@ -293,7 +342,9 @@ func (s *Scheduler) RegisterTenant(id string, weight int) {
 	s.rebalanceLocked()
 }
 
-// UnregisterTenant removes a stopped sandbox and redistributes its quotas.
+// UnregisterTenant removes a stopped sandbox, wakes any queued waiters for it
+// with ErrUnknownTenant, and redistributes its quotas cleanly across remaining
+// tenants while preserving strict quota conservation.
 func (s *Scheduler) UnregisterTenant(id string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -303,8 +354,22 @@ func (s *Scheduler) UnregisterTenant(id string) {
 		return
 	}
 	s.totalWeight -= t.weight
-	s.totalJUsed -= t.journalUsed
+	s.totalJUsed = max(0, s.totalJUsed-t.journalUsed)
 	delete(s.tenants, id)
+
+	if len(s.waitQueue) > 0 {
+		kept := s.waitQueue[:0]
+		for _, w := range s.waitQueue {
+			if w.tenantID == id {
+				w.removed = true
+				close(w.ready)
+				continue
+			}
+			kept = append(kept, w)
+		}
+		s.waitQueue = kept
+	}
+
 	s.rebalanceLocked()
 }
 
@@ -326,10 +391,35 @@ func (s *Scheduler) ObserveBlockAccess(id string, blockKey uint64, blockBytes in
 	if !hit {
 		t.cacheUsed = min(t.cacheQuota, t.cacheUsed+unit)
 	}
-	if (t.mrc.hits+t.mrc.misses)%64 == 0 {
+	ops := t.mrc.hits + t.mrc.misses
+	if ops == 1 || ops == 16 || ops%64 == 0 {
 		s.rebalanceLocked()
 	}
 	return hit, nil
+}
+
+// ObserveJournalState synchronizes real VFS v2 Volume.State() backlog and
+// oldest-unpublished age into HARE without replacing the canonical v2 journal
+// or its publication bound.
+func (s *Scheduler) ObserveJournalState(id string, backlog int64, oldestAge time.Duration) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	t, ok := s.tenants[id]
+	if !ok {
+		return fmt.Errorf("%w: %s", ErrUnknownTenant, id)
+	}
+	if backlog < 0 {
+		backlog = 0
+	}
+	s.totalJUsed = max(0, s.totalJUsed-t.journalUsed) + backlog
+	t.journalUsed = backlog
+	if backlog == 0 || oldestAge <= 0 {
+		t.oldestAck = time.Time{}
+	} else {
+		t.oldestAck = s.cfg.Clock.Now().Add(-oldestAge)
+	}
+	return nil
 }
 
 // Rebalance recomputes per-tenant cache, journal, and S3 network shares using
@@ -348,72 +438,136 @@ func (s *Scheduler) rebalanceLocked() {
 
 	// 1. Cache allocation: every tenant receives a scan-resistant floor (25% of
 	// weighted proportional share) so no tenant is starved; the remaining 75%
-	// elastic pool is distributed proportionally to weight * (epsilon + marginalGain),
-	// shifting cache away from zero-reuse scan noisy neighbours to high-reuse
-	// interactive toolchains.
+	// elastic pool is distributed proportionally to weight * (epsilon + cacheUtility(floorBlocks)),
+	// shifting cache away from zero-reuse scans and idle sandboxes to high-reuse
+	// interactive toolchains while conserving exact sum(CacheQuota) == CacheCapacity.
 	const floorFrac = 0.25
-	elasticPool := float64(s.cfg.CacheCapacity) * (1.0 - floorFrac)
+	const blockUnit int64 = 64 << 10
 
-	var sumScore float64
 	ids := make([]string, 0, n)
 	for id := range s.tenants {
 		ids = append(ids, id)
 	}
 	sort.Strings(ids)
 
-	const blockUnit int64 = 64 << 10
+	minUnit := min(blockUnit, s.cfg.CacheCapacity/int64(n))
+	floors := make([]int64, n)
 	scores := make([]float64, n)
+	var sumFloor int64
+	var sumScore float64
+
 	for i, id := range ids {
 		t := s.tenants[id]
-		curBlocks := max(1, t.cacheQuota/blockUnit)
-		u := t.mrc.marginalGain(curBlocks)
+		wFrac := float64(t.weight) / float64(s.totalWeight)
+		fb := max(minUnit, int64(float64(s.cfg.CacheCapacity)*floorFrac*wFrac))
+		floors[i] = fb
+		sumFloor += fb
+	}
+	// If minUnit clamping pushed sumFloor past CacheCapacity, cap floors at minUnit.
+	if sumFloor > s.cfg.CacheCapacity {
+		sumFloor = 0
+		for i := range ids {
+			floors[i] = minUnit
+			sumFloor += minUnit
+		}
+	}
+	elasticPool := max(int64(0), s.cfg.CacheCapacity-sumFloor)
+
+	for i, id := range ids {
+		t := s.tenants[id]
+		floorBlocks := max(int64(1), floors[i]/blockUnit)
+		u := t.mrc.cacheUtility(floorBlocks)
 		t.utility = u
 		sc := float64(t.weight) * (0.02 + u)
 		scores[i] = sc
 		sumScore += sc
 	}
 
+	quotas := make([]int64, n)
 	var assignedCache int64
-	for i, id := range ids {
-		t := s.tenants[id]
-		wFrac := float64(t.weight) / float64(s.totalWeight)
-		floorBytes := int64(float64(s.cfg.CacheCapacity) * floorFrac * wFrac)
+	for i := range ids {
 		var bonus int64
-		if sumScore > 0 {
-			bonus = int64(elasticPool * (scores[i] / sumScore))
+		if sumScore > 0 && elasticPool > 0 {
+			bonus = int64(float64(elasticPool) * (scores[i] / sumScore))
 		}
-		q := max(64<<10, floorBytes+bonus)
-		t.cacheQuota = q
-		if t.cacheUsed > q {
-			t.cacheUsed = q
-		}
+		q := max(minUnit, floors[i]+bonus)
+		quotas[i] = q
 		assignedCache += q
 	}
-	// Trim or hand out rounding remainder on the first tenant so sum <= CacheCapacity.
-	if diff := s.cfg.CacheCapacity - assignedCache; diff != 0 && len(ids) > 0 {
-		first := s.tenants[ids[0]]
-		if first.cacheQuota+diff >= 64<<10 {
-			first.cacheQuota += diff
+
+	// Enforce exact quota conservation: sum(CacheQuota) == s.cfg.CacheCapacity.
+	diff := s.cfg.CacheCapacity - assignedCache
+	if diff > 0 {
+		// Distribute rounding remainder proportionally, then +1 byte in score/ID order.
+		order := make([]int, n)
+		for i := range n {
+			order[i] = i
+		}
+		sort.SliceStable(order, func(a, b int) bool {
+			return scores[order[a]] > scores[order[b]]
+		})
+		for k := 0; diff > 0; k = (k + 1) % n {
+			quotas[order[k]]++
+			diff--
+		}
+	} else if diff < 0 {
+		excess := -diff
+		var trimmable int64
+		for i := range n {
+			if quotas[i] > minUnit {
+				trimmable += quotas[i] - minUnit
+			}
+		}
+		if trimmable > 0 {
+			for i := range n {
+				if quotas[i] <= minUnit || excess == 0 {
+					continue
+				}
+				avail := quotas[i] - minUnit
+				cut := min(avail, (excess*avail)/trimmable)
+				quotas[i] -= cut
+				excess -= cut
+			}
+		}
+		for excess > 0 {
+			progressed := false
+			for i := n - 1; i >= 0 && excess > 0; i-- {
+				if quotas[i] > minUnit {
+					quotas[i]--
+					excess--
+					progressed = true
+				}
+			}
+			if !progressed {
+				break
+			}
 		}
 	}
 
-	// 2. Journal & S3 Network shares: coupled with cache miss pressure and
-	// publication-age urgency so tenants approaching the 5 s S3 publication SLA
-	// get priority drain bandwidth while noisy writers are capped before pushing
-	// the node past journal slowFrom (75%).
+	for i, id := range ids {
+		t := s.tenants[id]
+		t.cacheQuota = quotas[i]
+		if t.cacheUsed > t.cacheQuota {
+			evictedBytes := t.cacheUsed - t.cacheQuota
+			t.mrc.evictions += uint64((evictedBytes + blockUnit - 1) / blockUnit)
+			t.cacheUsed = t.cacheQuota
+		}
+	}
+
+	// 2. Journal & S3 Network shares: coupled with publication-age urgency so
+	// tenants approaching the 5 s S3 publication SLA get priority drain bandwidth
+	// while noisy writers are capped before pushing the node past journal
+	// slowFrom (75%).
 	now := s.cfg.Clock.Now()
 	var sumNetWeight float64
 	netWeights := make([]float64, n)
 	for i, id := range ids {
 		t := s.tenants[id]
 		wFrac := float64(t.weight) / float64(s.totalWeight)
-		// Dynamic journal ceiling allows an active tenant to burst up to 4x its
-		// static share while total node usage is low, tightening toward 1.25x as
-		// total node journal fill rises toward 75%.
-		nodeFill := float64(s.totalJUsed) / float64(s.cfg.JournalCapacity)
+		nodeFill := min(1.0, float64(s.totalJUsed)/float64(s.cfg.JournalCapacity))
 		burstMult := max(1.25, 4.0-3.0*nodeFill)
 		jCeil := int64(math.Min(float64(s.cfg.JournalCapacity)*0.50, float64(s.cfg.JournalCapacity)*wFrac*burstMult))
-		t.journalQuota = max(256<<10, jCeil)
+		t.journalQuota = max(min(256<<10, s.cfg.JournalCapacity), jCeil)
 
 		nw := float64(t.weight)
 		if !t.oldestAck.IsZero() && now.Sub(t.oldestAck) > s.cfg.PublishBound/2 {
@@ -424,9 +578,48 @@ func (s *Scheduler) rebalanceLocked() {
 		sumNetWeight += nw
 	}
 
+	minNet := min(int64(64<<10), s.cfg.NetBandwidthBps/int64(n))
+	netShares := make([]int64, n)
+	var assignedNet int64
+	for i := range ids {
+		share := max(minNet, int64(float64(s.cfg.NetBandwidthBps)*(netWeights[i]/sumNetWeight)))
+		netShares[i] = share
+		assignedNet += share
+	}
+	if excess := assignedNet - s.cfg.NetBandwidthBps; excess > 0 {
+		var trimmable int64
+		for i := range n {
+			if netShares[i] > minNet {
+				trimmable += netShares[i] - minNet
+			}
+		}
+		if trimmable > 0 {
+			for i := range n {
+				if netShares[i] <= minNet || excess == 0 {
+					continue
+				}
+				avail := netShares[i] - minNet
+				cut := min(avail, (excess*avail)/trimmable)
+				netShares[i] -= cut
+				excess -= cut
+			}
+		}
+		for excess > 0 {
+			progressed := false
+			for i := n - 1; i >= 0 && excess > 0; i-- {
+				if netShares[i] > minNet {
+					netShares[i]--
+					excess--
+					progressed = true
+				}
+			}
+			if !progressed {
+				break
+			}
+		}
+	}
 	for i, id := range ids {
-		t := s.tenants[id]
-		t.netShareBps = max(64<<10, int64(float64(s.cfg.NetBandwidthBps)*(netWeights[i]/sumNetWeight)))
+		s.tenants[id].netShareBps = netShares[i]
 	}
 }
 
@@ -473,30 +666,29 @@ func (s *Scheduler) ReleaseJournal(id string, publishedBytes int64) {
 	if !ok {
 		return
 	}
-	rel := min(publishedBytes, t.journalUsed)
-	t.journalUsed -= rel
-	s.totalJUsed = max(0, s.totalJUsed-rel)
-	if t.journalUsed == 0 {
+	if publishedBytes >= t.journalUsed {
+		s.totalJUsed = max(0, s.totalJUsed-t.journalUsed)
+		t.journalUsed = 0
 		t.oldestAck = time.Time{}
-	} else {
-		t.oldestAck = s.cfg.Clock.Now()
+	} else if publishedBytes > 0 {
+		t.journalUsed -= publishedBytes
+		s.totalJUsed = max(0, s.totalJUsed-publishedBytes)
 	}
 }
 
 func (s *Scheduler) refillTokensLocked(now time.Time) {
-	dt := now.Sub(s.lastTokenT).Seconds()
-	if dt > 0 {
+	if now.After(s.lastTokenT) {
+		dt := now.Sub(s.lastTokenT).Seconds()
 		s.nodeTokens = math.Min(float64(s.cfg.NetBurstBytes), s.nodeTokens+dt*float64(s.cfg.NetBandwidthBps))
 		s.lastTokenT = now
 	}
 }
 
-// Acquire schedules one IO operation of size bytes for tenant id across the
-// Start-Time Fair Queuing (SFQ) worker pool and S3 bandwidth shaper.
-//
-// Callers receive a Ticket containing any required PaceWait (which real callers
-// sleep on via context-aware select, or simulated clocks advance directly) and
-// MUST call Ticket.Done() when the operation finishes.
+// Acquire admits an IO operation for tenant id using Start-Time Fair Queuing
+// across node worker slots and lazy token-bucket pacing over S3 bandwidth.
+// Operations belonging to a tenant approaching PublishBound receive bounded
+// priority without starving non-urgent readers. Callers MUST invoke Ticket.Done
+// when the operation finishes.
 func (s *Scheduler) Acquire(ctx context.Context, id string, op OpClass, bytes int64) (*Ticket, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -542,11 +734,17 @@ func (s *Scheduler) Acquire(ctx context.Context, id string, op OpClass, bytes in
 	select {
 	case <-w.ready:
 		s.mu.Lock()
-		t2 := s.tenants[id]
-		var pace time.Duration
-		if t2 != nil {
-			pace = s.chargeNetworkLocked(t2, op, bytes, s.cfg.Clock.Now())
+		if w.removed {
+			s.mu.Unlock()
+			return nil, fmt.Errorf("%w: %s", ErrUnknownTenant, id)
 		}
+		t2 := s.tenants[id]
+		if t2 == nil {
+			s.releaseWorkerLocked(id)
+			s.mu.Unlock()
+			return nil, fmt.Errorf("%w: %s", ErrUnknownTenant, id)
+		}
+		pace := s.chargeNetworkLocked(t2, op, bytes, s.cfg.Clock.Now())
 		s.mu.Unlock()
 		return &Ticket{sched: s, tenantID: id, PaceWait: pace}, nil
 	case <-ctx.Done():
@@ -574,7 +772,10 @@ func (s *Scheduler) removeWaiterLocked(target *sfqWaiter) {
 			return
 		}
 	}
-	// If already popped and granted right before cancellation, release the slot.
+	// If already popped and granted right before cancellation (and not dropped by UnregisterTenant), release the slot.
+	if target.removed {
+		return
+	}
 	select {
 	case <-target.ready:
 		s.releaseWorkerLocked(target.tenantID)
@@ -620,8 +821,30 @@ func (s *Scheduler) releaseWorkerLocked(id string) {
 		t.activeWorkers--
 	}
 	if len(s.waitQueue) > 0 {
-		next := s.waitQueue[0]
-		s.waitQueue = s.waitQueue[1:]
+		pickIdx := 0
+		maxUrgentStreak := max(2, s.cfg.WorkerSlots/2)
+		if s.waitQueue[0].urgent {
+			nonUrgentIdx := -1
+			for i, w := range s.waitQueue {
+				if !w.urgent {
+					nonUrgentIdx = i
+					break
+				}
+			}
+			if nonUrgentIdx >= 0 && s.urgentStreak >= maxUrgentStreak {
+				pickIdx = nonUrgentIdx
+				s.urgentStreak = 0
+			} else if nonUrgentIdx >= 0 {
+				s.urgentStreak++
+			} else {
+				s.urgentStreak = 0
+			}
+		} else {
+			s.urgentStreak = 0
+		}
+
+		next := s.waitQueue[pickIdx]
+		s.waitQueue = append(s.waitQueue[:pickIdx], s.waitQueue[pickIdx+1:]...)
 		if next.startTag > s.virtualTime {
 			s.virtualTime = next.startTag
 		}
@@ -631,6 +854,7 @@ func (s *Scheduler) releaseWorkerLocked(id string) {
 		close(next.ready)
 		return
 	}
+	s.urgentStreak = 0
 	if s.inFlight > 0 {
 		s.inFlight--
 	}
@@ -663,6 +887,7 @@ func (s *Scheduler) Snapshot() []TenantAllocation {
 			ActiveWorkers:   t.activeWorkers,
 			Hits:            t.mrc.hits,
 			Misses:          t.mrc.misses,
+			Evictions:       t.mrc.evictions,
 			BytesMoved:      t.bytesMoved,
 			ThrottleMicros:  t.throttleMicros,
 			MarginalUtility: t.utility,

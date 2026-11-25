@@ -135,6 +135,7 @@ func measurePlainNVMe(scratchDir string) (HostNVMeBaseline, error) {
 //   - 75% interactive coding sandboxes (repeatable 12-MiB toolchain working set)
 //   - 25% noisy-neighbour scan + bulk-ingest sandboxes (256-MiB one-pass scans +
 //     heavy journal floods)
+//
 // across three policies:
 //  1. unscheduled_fcfs: global shared LRU + FIFO worker queue + unpartitioned journal
 //  2. static_equal: rigid 1/N cache & journal partitions

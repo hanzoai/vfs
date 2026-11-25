@@ -27,27 +27,36 @@ and `pkg/hare/scheduler_test.go`.
 
 ## 2. Architecture (`pkg/hare`)
 
-1. **Online O(1) Ghost-Ring Miss-Ratio Curve (`mrcTracker`):**
-   * Tracks per-sandbox 64 KiB block reuse distances inside a fixed 256-entry
-     ring buffer without heap churn or background threads.
+1. **Online Stack-Distance Miss-Ratio Curve (`mrcTracker`):**
+   * Tracks exact per-sandbox distinct-block reuse distances (Mattson stack
+     distance) inside a fixed 256-entry zero-allocation LRU stack across 64
+     four-block buckets with periodic sliding-window halving so idle-to-active
+     and phase transitions converge rapidly.
    * Preserves a scan-resistant `25%` weighted floor for every tenant while
      allocating the `75%` elastic pool proportionally to `weight * (0.02 +
-     marginalGain)`, reclaiming wasted cache from zero-reuse scan/ingest
-     sandboxes so interactive coding sandboxes hold their full hot working sets.
-2. **Per-Tenant Journal Ceilings & `<= 5 s` Publication Urgency:**
-   * Bounds each sandbox's dynamic journal ceiling (`ReserveJournal` /
-     `ReleaseJournal`) before aggregate node usage crosses `journal.slowFrom`
-     (`75%`), applying backpressure strictly to the noisy writer (`ErrJournalQuota`
-     at ceiling) while innocent sandboxes append at `0 us` throttle delay.
-   * Boosts S3 drain bandwidth (`2.5x`) and SFQ priority (`0.25x` virtual cost)
-     for any tenant whose oldest unpublished record approaches the `5 s`
-     HIP-1342 publication target.
-3. **Start-Time Fair Queuing (`Acquire` / `Ticket`) & `TenantBackend`:**
+     cacheUtility(floorBlocks))`, enforcing exact byte-for-byte quota
+     conservation (`sum(CacheQuota) == CacheCapacity`) and reclaiming wasted
+     cache from idle and zero-reuse scan/ingest sandboxes so interactive
+     coding sandboxes hold their full hot working sets (`> 4x` interactive vs
+     zero-reuse scan share across 128 sandboxes).
+2. **Canonical VFS v2 Journal & Publication-Bound Integration (`ObserveJournalState`):**
+   * Does **not** replace the canonical VFS v2 journal (`ledger.go`, `journal/`)
+     or its `Config.Bound` publication timer / shared `vfs.Budget` admission
+     path. Instead, hosts feed real `Volume.State().Backlog` and
+     `Volume.State().Age` into `Scheduler.ObserveJournalState`, boosting S3
+     drain bandwidth (`2.5x`) and SFQ priority (`0.25x` virtual cost) for any
+     tenant whose oldest unpublished v2 journal record approaches `PublishBound`.
+   * Per-tenant journal ceilings (`ReserveJournal` / `ReleaseJournal`) remain
+     available for admission-layer isolation before aggregate node usage crosses
+     `journal.slowFrom` (`75%`).
+3. **Start-Time Fair Queuing (`Acquire` / `Ticket`) with Starvation Prevention & `TenantBackend`:**
    * Orders contended worker slots by virtual start tag `S_i = max(v(t),
-     F_{i,k-1})` and shapes S3 bandwidth with lazy `Clock.Now()` token accounting
-     (full unthrottled node burst when uncontended).
+     F_{i,k-1})` with bounded urgent-publish streak interleaving so continuous
+     urgent publish floods cannot starve interactive readers, and cleanly wakes
+     queued waiters with `ErrUnknownTenant` upon `UnregisterTenant`.
    * `hare.NewTenantBackend` wraps any `backend.Backend` so 32-128 live
-     `vfs.Volume` mounts share one `hare.Scheduler` transparently.
+     journaled `vfs.Volume` mounts share one `hare.Scheduler` and shared
+     `vfs.Budget` transparently, including across S3 outages and backpressure.
 
 ## 3. Empirical evaluation across 32 and 128 sandboxes (HIP-1342)
 
