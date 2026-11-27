@@ -113,6 +113,10 @@ type Options struct {
 	Disk Disk
 	// Clock supplies time. Nil means the wall clock.
 	Clock Clock
+	// WSBuffer, when non-nil, wraps the journal's Disk with a Write Scrap Buffer
+	// that absorbs small unaligned partial writes into aligned pages while
+	// bypassing large page-aligned writes zero-copy. Nil disables it (default).
+	WSBuffer *WSBufferConfig
 }
 
 // Marks are the three watermarks. Published <= Durable <= Visible.
@@ -250,6 +254,7 @@ type span struct {
 // Journal is safe for concurrent use.
 type Journal struct {
 	disk    Disk
+	ws      *WSBufferDisk
 	clock   Clock
 	segment int64
 	limit   int // most segment files
@@ -371,6 +376,11 @@ func Open(dir string, opt Options) (*Journal, error) {
 		if disk, err = Files(dir); err != nil {
 			return nil, err
 		}
+	}
+	if opt.WSBuffer != nil {
+		ws := WrapWSBuffer(disk, *opt.WSBuffer)
+		j.ws = ws
+		disk = ws
 	}
 	j.disk = disk
 	if err := j.recover(opt.Published); err != nil {
@@ -857,6 +867,15 @@ func (j *Journal) Stats() Stats {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return j.stats
+}
+
+// WSBufferStats returns cumulative Write Scrap Buffer telemetry across all
+// segment files opened by this journal, or a zero value if WSBuffer is disabled.
+func (j *Journal) WSBufferStats() WSBufferStats {
+	if j.ws == nil {
+		return WSBufferStats{}
+	}
+	return j.ws.Stats()
 }
 
 // Close makes everything appended durable, writes the final mark, stops the
