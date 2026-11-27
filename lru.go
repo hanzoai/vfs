@@ -57,6 +57,15 @@ func (c *lru[K, V]) add(k K, v V, cost int64) {
 	}
 }
 
+// clear empties the cache safely while held by concurrent callers.
+func (c *lru[K, V]) clear() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.used = 0
+	c.ll.Init()
+	clear(c.m)
+}
+
 // stats returns the bytes held and the bound.
 func (c *lru[K, V]) stats() (used, max int64) {
 	c.mu.Lock()

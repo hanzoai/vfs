@@ -324,6 +324,7 @@ func (v *Volume) make(ctx context.Context, dir InodeID, name string, mode fs.Fil
 		} else {
 			in.Nlink = 1
 		}
+		v.recordMakeHint(dir, name, in.ID)
 		return ch, nil
 	})
 	return in, err

@@ -90,6 +90,15 @@ type Config struct {
 
 	Workers int // chunks, hashes and seals in parallel; default the number of CPUs, at most 16
 	Streams int // objects written to the store in parallel; default 8
+
+	// PackClassifier optionally separates newly sealed chunks into lifetime-aware
+	// open pack streams (0..2) during generation settlement (HIP-1344, DOGI).
+	// Nil selects standard single-stream FIFO packing. Both modes write identical
+	// format-v2 packs, shards and Heads.
+	PackClassifier PackLifetimeClassifier
+	// PackTargetBytes optionally overrides the open pack flush threshold (default
+	// packTarget = 16 MiB) for pack-sizing sensitivity benchmarks and tests.
+	PackTargetBytes int
 }
 
 func (c Config) valid() (Config, error) {
@@ -205,6 +214,13 @@ type Volume struct {
 	done  chan struct{} // closed when the publisher has stopped
 	base  context.Context
 	stop  context.CancelFunc
+
+	hintMu      sync.RWMutex
+	pathHints   map[InodeID]string
+	overwrites  map[InodeID]uint32
+	rootMu      sync.Mutex
+	rootCond    *sync.Cond
+	activeRoots map[ref]int
 }
 
 func newVolume(cfg Config) *Volume {
@@ -904,6 +920,7 @@ func (v *Volume) touch(f *fileState, seq uint64) {
 	v.files[f.ino] = f
 	f.dep, f.changed = seq, true
 	v.dirtyFiles[f.ino] = f
+	v.recordOverwriteHint(f)
 }
 
 // forget drops a removed file's state: nothing of it is held for a handle, and its data

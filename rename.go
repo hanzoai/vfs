@@ -145,6 +145,7 @@ func (v *Volume) Rename(ctx context.Context, oldDir InodeID, oldName string, new
 				ch.dirBumps = append(ch.dirBumps, dirBump{dir: oldDir, delta: +1})
 			}
 		}
+		v.recordRenameHint(oldDir, oldName, srcID, newDir, newName, dstID, flags)
 		return ch, nil
 	})
 	return err

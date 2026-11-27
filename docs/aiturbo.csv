@@ -1,0 +1,7 @@
+backend,mode,items,item_bytes,group_size,streams,injected_rtt_ms,upload_reqs,upload_bytes,upload_ms,download_reqs,download_bytes,download_ms
+file,baseline-parallel,128,65536,1,8,0,130,8402826,7255.016,130,8402826,19.208
+file,aiturbo-g8,128,65536,8,8,0,18,8402826,1344.550,18,8402826,16.050
+file,baseline-parallel,128,65536,1,8,5,130,8402826,6762.727,130,8402826,108.327
+file,aiturbo-g8,128,65536,8,8,5,18,8402826,1521.804,18,8402826,37.175
+file,baseline-parallel,128,65536,1,8,15,130,8402826,6564.192,130,8402826,292.946
+file,aiturbo-g8,128,65536,8,8,15,18,8402826,1382.630,18,8402826,72.673

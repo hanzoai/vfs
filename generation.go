@@ -61,6 +61,7 @@ type snap struct {
 	mtime  time.Time
 	ctime  time.Time
 	fz     *layer
+	class  int
 
 	muts      []mut    // the records that make the file what it is now
 	outInline []byte   // the settled content once the generation is published
@@ -78,7 +79,7 @@ func (v *Volume) cut() *generation {
 	g := &generation{v: v, seq: v.applied, over: v.over, gone: v.gone, next: v.next, root: v.root, ns: v.ns}
 	v.over, v.gone, v.goneSet, v.logged = newOverlay(), nil, map[InodeID]struct{}{}, 0
 	for _, f := range v.dirtyFiles {
-		fz := &layer{dirty: f.lv.dirty, dirtyN: f.lv.dirtyN, limit: f.lv.limit, void: f.lv.void}
+		fz := &layer{dirty: f.lv.dirty, dirtyN: f.lv.dirtyN, limit: f.lv.limit, void: f.lv.void, voidRask: f.lv.voidRask.Clone()}
 		g.snaps = append(g.snaps, &snap{f: f, ino: f.ino, inline: f.inline, ext: f.ext, size: f.size, mtime: f.mtime, ctime: f.ctime, fz: fz})
 		g.bytes += fz.dirtyN
 		f.fz = fz
@@ -211,6 +212,7 @@ func (g *generation) settleFile(ctx context.Context, s *snap, pk *packer) error 
 	if err != nil {
 		return err
 	}
+	s.class = v.classifySnap(ctx, g, s)
 	b := body{inline: s.inline, ext: s.ext, size: s.size, layers: []*layer{s.fz}}
 	var inline []byte
 	var out []extent
@@ -287,6 +289,18 @@ func (s *snap) runs() []run {
 	}
 	// settled adds a stretch of the settled content: what was punched out is not in it.
 	settled := func(a, b uint64) {
+		if s.fz.voidRask != nil {
+			s.fz.voidRask.RangeOverlaps(a, b, func(r run) {
+				if r.a > a {
+					add(a, r.a)
+				}
+				a = max(a, r.b)
+			})
+			if a < b {
+				add(a, b)
+			}
+			return
+		}
 		for _, r := range s.fz.void {
 			if r.b <= a {
 				continue
@@ -327,6 +341,9 @@ func (s *snap) touched(a, b uint64) bool {
 
 // voided reports whether a punched range overlaps [a, b).
 func (s *snap) voided(a, b uint64) bool {
+	if s.fz.voidRask != nil {
+		return s.fz.voidRask.Overlaps(a, b)
+	}
 	v := s.fz.void
 	i := sort.Search(len(v), func(i int) bool { return v[i].b > a })
 	return i < len(v) && v[i].a < b
@@ -410,7 +427,8 @@ func (g *generation) recut(ctx context.Context, s *snap, b *body, pk *packer) ([
 			}
 			e := &extent{off: pos, n: uint32(len(piece))}
 			out = append(out, e)
-			jobs.do(func(ctx context.Context) error { return g.putChunk(ctx, e, piece, pk) })
+			cls := s.class
+			jobs.do(func(ctx context.Context) error { return g.putChunkClassified(ctx, e, piece, pk, cls) })
 			pos += uint64(len(piece))
 		}
 	}
@@ -427,6 +445,10 @@ func (g *generation) recut(ctx context.Context, s *snap, b *body, pk *packer) ([
 // putChunk names a chunk, and seals it into a pack unless the Volume has it already: that
 // is dedupe. The record of where it lies is staged for the tree.
 func (g *generation) putChunk(ctx context.Context, e *extent, piece []byte, pk *packer) error {
+	return g.putChunkClassified(ctx, e, piece, pk, 0)
+}
+
+func (g *generation) putChunkClassified(ctx context.Context, e *extent, piece []byte, pk *packer, class int) error {
 	v := g.v
 	id := sumChunk(piece)
 	e.id = id
@@ -438,7 +460,7 @@ func (g *generation) putChunk(ctx context.Context, e *extent, piece []byte, pk *
 	if err != nil {
 		return err
 	}
-	w, err := pk.add(frame)
+	w, err := pk.addClassified(class, frame)
 	if err != nil {
 		return err
 	}

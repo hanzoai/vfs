@@ -71,8 +71,16 @@ type packer struct {
 	g  *generation
 	up *uploader
 
-	mu  sync.Mutex
-	cur pack
+	mu      sync.Mutex
+	cur     pack
+	streams [3]pack
+}
+
+func (pk *packer) target() int {
+	if pk.g != nil && pk.g.v != nil && pk.g.v.cfg.PackTargetBytes > 0 {
+		return min(pk.g.v.cfg.PackTargetBytes, packTarget)
+	}
+	return packTarget
 }
 
 func (pk *packer) add(frame []byte) (where, error) {
@@ -85,6 +93,31 @@ func (pk *packer) add(frame []byte) (where, error) {
 	return w, err
 }
 
+func (pk *packer) addClassified(class int, frame []byte) (where, error) {
+	if pk.g == nil || pk.g.v == nil || pk.g.v.cfg.PackClassifier == nil {
+		if pk.target() == packTarget {
+			return pk.add(frame)
+		}
+		pk.mu.Lock()
+		defer pk.mu.Unlock()
+		w, err := pk.cur.add(frame)
+		if err == nil && len(pk.cur.buf) >= pk.target() {
+			pk.send()
+		}
+		return w, err
+	}
+	if class < 0 || class >= len(pk.streams) {
+		class = 1
+	}
+	pk.mu.Lock()
+	defer pk.mu.Unlock()
+	w, err := pk.streams[class].add(frame)
+	if err == nil && len(pk.streams[class].buf) >= pk.target() {
+		pk.sendStream(class)
+	}
+	return w, err
+}
+
 // flush sends the open pack, whatever its size.
 func (pk *packer) flush() {
 	pk.mu.Lock()
@@ -92,6 +125,19 @@ func (pk *packer) flush() {
 	if !pk.cur.empty() {
 		pk.send()
 	}
+	for i := range pk.streams {
+		if !pk.streams[i].empty() {
+			pk.sendStream(i)
+		}
+	}
+}
+
+func (pk *packer) sendStream(class int) {
+	saved := pk.cur
+	pk.cur = pk.streams[class]
+	pk.streams[class] = pack{}
+	pk.send()
+	pk.cur = saved
 }
 
 // send hands the open pack to the uploader. mu is held.

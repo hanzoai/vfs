@@ -50,11 +50,46 @@ type span struct {
 
 func (s span) end() uint64 { return s.off + uint64(len(s.data)) }
 
+// raskVoidPromoteThreshold is the measured crossover at which a layer's punched
+// void list promotes from a flat sorted []run slice to a compact RaskRunIndex
+// (~8.6 structural B/run and O(log N) inserts/queries vs O(N) slice copies).
+// Below 512 runs, flat []run stays in L1/L2 cache with zero B+tree overhead.
+const raskVoidPromoteThreshold = 512
+
+// raskVoidDemoteThreshold is the hysteresis bound below which a truncated or
+// coalesced RaskRunIndex demotes back to a flat []run slice.
+const raskVoidDemoteThreshold = 128
+
 type layer struct {
-	dirty  []span // sorted, disjoint, never touching
-	dirtyN int64  // bytes plus spanCost per span
-	limit  uint64 // how much of the content below still counts
-	void   []run  // ranges punched out of the content below; sorted, disjoint, never touching
+	dirty    []span        // sorted, disjoint, never touching
+	dirtyN   int64         // bytes plus spanCost per span
+	limit    uint64        // how much of the content below still counts
+	void     []run         // ranges punched out of the content below (< raskVoidPromoteThreshold)
+	voidRask *RaskRunIndex // compact sparse-range index once void count reaches raskVoidPromoteThreshold
+}
+
+func (l *layer) forEachVoid(off, cut uint64, fn func(run)) {
+	if l.voidRask != nil {
+		l.voidRask.RangeOverlaps(off, cut, fn)
+		return
+	}
+	for j := sort.Search(len(l.void), func(j int) bool { return l.void[j].b > off }); j < len(l.void) && l.void[j].a < cut; j++ {
+		fn(l.void[j])
+	}
+}
+
+func (l *layer) voidRuns() []run {
+	if l.voidRask != nil {
+		return l.voidRask.AllRuns()
+	}
+	return slices.Clone(l.void)
+}
+
+func (l *layer) voidLen() int {
+	if l.voidRask != nil {
+		return l.voidRask.Len()
+	}
+	return len(l.void)
 }
 
 // fileState is one file's content as the Volume holds it. All handles to a file share
@@ -268,14 +303,13 @@ func (b *body) plan(p []byte, off uint64) (int, []piece) {
 		if cut <= off {
 			continue
 		}
-		for j := sort.Search(len(l.void), func(j int) bool { return l.void[j].b > off }); j < len(l.void) && l.void[j].a < cut; j++ {
-			r := l.void[j]
+		l.forEachVoid(off, cut, func(r run) {
 			lo, hi := max(r.a, off), min(r.b, cut)
 			if lo < hi {
 				clear(p[lo-off : hi-off])
 				covered = append(covered, run{lo, hi})
 			}
-		}
+		})
 		for j := sort.Search(len(l.dirty), func(j int) bool { return l.dirty[j].end() > off }); j < len(l.dirty) && l.dirty[j].off < cut; j++ {
 			s := l.dirty[j]
 			lo, hi := max(s.off, off), min(s.end(), cut)
@@ -328,6 +362,10 @@ func join(rs []run) []run {
 // fetch fills p with the bytes of pieces, reading the chunks (from the cache, or the
 // store) at the tree whose root is given. No lock is held.
 func (v *Volume) fetch(ctx context.Context, root ref, pieces []piece, p []byte) error {
+	if len(pieces) > 0 {
+		v.acquireRoot(root)
+		defer v.releaseRoot(root)
+	}
 	for _, pc := range pieces {
 		plain, err := v.getChunk(ctx, root, pc.id)
 		if err != nil {
@@ -458,20 +496,40 @@ func (v *Volume) truncate(f *fileState, size uint64, when, ctime time.Time) {
 		}
 		v.account(n - f.lv.dirtyN)
 		f.lv.dirty, f.lv.dirtyN = kept, n
-		for len(f.lv.void) > 0 && f.lv.void[len(f.lv.void)-1].b > size {
-			last := &f.lv.void[len(f.lv.void)-1]
-			if last.a >= size {
-				f.lv.void = f.lv.void[:len(f.lv.void)-1]
-			} else {
-				last.b = size
-			}
-		}
+		f.lv.truncateVoid(size)
 	}
 	f.size, f.mtime, f.ctime = size, when, ctime
 }
 
+func (l *layer) truncateVoid(size uint64) {
+	if l.voidRask != nil {
+		l.voidRask.Truncate(size)
+		if l.voidRask.Len() <= raskVoidDemoteThreshold {
+			l.void = l.voidRask.AllRuns()
+			l.voidRask = nil
+		}
+		return
+	}
+	for len(l.void) > 0 && l.void[len(l.void)-1].b > size {
+		last := &l.void[len(l.void)-1]
+		if last.a >= size {
+			l.void = l.void[:len(l.void)-1]
+		} else {
+			last.b = size
+		}
+	}
+}
+
 // addVoid punches [a, b) out of what lies beneath l.
 func (l *layer) addVoid(a, b uint64) {
+	if l.voidRask != nil {
+		l.voidRask.InsertRange(a, b)
+		if l.voidRask.Len() <= raskVoidDemoteThreshold {
+			l.void = l.voidRask.AllRuns()
+			l.voidRask = nil
+		}
+		return
+	}
 	out := make([]run, 0, len(l.void)+1)
 	placed := false
 	for _, r := range l.void {
@@ -491,6 +549,10 @@ func (l *layer) addVoid(a, b uint64) {
 		out = append(out, run{a, b})
 	}
 	l.void = out
+	if len(l.void) >= raskVoidPromoteThreshold {
+		l.voidRask = NewRaskRunIndexFromSorted(l.void)
+		l.void = nil
+	}
 }
 
 // Punch deallocates [off, off+n) of the file: those bytes read as zero from now on, the
