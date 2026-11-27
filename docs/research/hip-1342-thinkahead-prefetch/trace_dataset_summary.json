@@ -1,0 +1,976 @@
+{
+  "generated_at": "2026-11-26T22:21:47Z",
+  "issue": "hanzoai/vfs#18 (HIP-1342)",
+  "trace_dataset": [
+    {
+      "workflow": "go_build_live",
+      "command": "go build ./pkg/backend ./pkg/cost",
+      "provenance": "live-strace-vm",
+      "run_n_events": 761,
+      "run_n_unique_chunks": 761,
+      "run_n_unique_bytes": 7021630,
+      "run_n1_events": 777,
+      "run_n1_unique_chunks": 776,
+      "run_n1_unique_bytes": 7708762,
+      "predictability_repeat": {
+        "workflow": "go_build_live",
+        "provenance": "live-strace-vm",
+        "scenario": "live_repeat",
+        "run_n_unique_chunks": 761,
+        "run_n1_unique_chunks": 776,
+        "shared_chunks": 589,
+        "union_chunks": 948,
+        "jaccard_similarity": 0.6213080168776371,
+        "run_n1_covered_by_run_n": 0.759020618556701,
+        "run_n_used_by_run_n1": 0.7739816031537451,
+        "byte_coverage_ratio": 0.7677067990943293,
+        "transition_predictability": 0.37806451612903225,
+        "window8_predictability": 0.5058064516129033,
+        "window32_predictability": 0.5393548387096774,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 50,
+            "reach_ratio": 0.9,
+            "same_prefix_ratio": 0.82
+          },
+          {
+            "k": 100,
+            "reach_ratio": 0.86,
+            "same_prefix_ratio": 0.84
+          },
+          {
+            "k": 500,
+            "reach_ratio": 0.772,
+            "same_prefix_ratio": 0.762
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 0.7739816031537451,
+            "same_prefix_ratio": 0.7582128777923784
+          }
+        ]
+      },
+      "predictability_after_3_file_edit": {
+        "workflow": "go_build_live",
+        "provenance": "live-strace-vm",
+        "scenario": "live_plus_3_file_edit",
+        "run_n_unique_chunks": 761,
+        "run_n1_unique_chunks": 776,
+        "shared_chunks": 586,
+        "union_chunks": 951,
+        "jaccard_similarity": 0.6161934805467929,
+        "run_n1_covered_by_run_n": 0.7551546391752577,
+        "run_n_used_by_run_n1": 0.7700394218134035,
+        "byte_coverage_ratio": 0.7646253704550744,
+        "transition_predictability": 0.3535483870967742,
+        "window8_predictability": 0.4864516129032258,
+        "window32_predictability": 0.5225806451612903,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 50,
+            "reach_ratio": 0.9,
+            "same_prefix_ratio": 0.82
+          },
+          {
+            "k": 100,
+            "reach_ratio": 0.86,
+            "same_prefix_ratio": 0.85
+          },
+          {
+            "k": 500,
+            "reach_ratio": 0.768,
+            "same_prefix_ratio": 0.758
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 0.7700394218134035,
+            "same_prefix_ratio": 0.7542706964520368
+          }
+        ]
+      }
+    },
+    {
+      "workflow": "go_test_live",
+      "command": "go test -count=1 ./pkg/backend ./pkg/cost",
+      "provenance": "live-strace-vm",
+      "run_n_events": 2402,
+      "run_n_unique_chunks": 2028,
+      "run_n_unique_bytes": 52470001,
+      "run_n1_events": 2430,
+      "run_n1_unique_chunks": 2181,
+      "run_n1_unique_bytes": 56473126,
+      "predictability_repeat": {
+        "workflow": "go_test_live",
+        "provenance": "live-strace-vm",
+        "scenario": "live_repeat",
+        "run_n_unique_chunks": 2028,
+        "run_n1_unique_chunks": 2181,
+        "shared_chunks": 1652,
+        "union_chunks": 2557,
+        "jaccard_similarity": 0.6460696128275323,
+        "run_n1_covered_by_run_n": 0.7574507106831728,
+        "run_n_used_by_run_n1": 0.814595660749507,
+        "byte_coverage_ratio": 0.8597392147195818,
+        "transition_predictability": 0.3995412844036697,
+        "window8_predictability": 0.48211009174311925,
+        "window32_predictability": 0.5114678899082569,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 50,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 0.82
+          },
+          {
+            "k": 100,
+            "reach_ratio": 0.96,
+            "same_prefix_ratio": 0.9
+          },
+          {
+            "k": 500,
+            "reach_ratio": 0.8,
+            "same_prefix_ratio": 0.756
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 0.762,
+            "same_prefix_ratio": 0.696
+          }
+        ]
+      },
+      "predictability_after_3_file_edit": {
+        "workflow": "go_test_live",
+        "provenance": "live-strace-vm",
+        "scenario": "live_plus_3_file_edit",
+        "run_n_unique_chunks": 2028,
+        "run_n1_unique_chunks": 2181,
+        "shared_chunks": 1648,
+        "union_chunks": 2561,
+        "jaccard_similarity": 0.643498633346349,
+        "run_n1_covered_by_run_n": 0.7556166895919303,
+        "run_n_used_by_run_n1": 0.8126232741617357,
+        "byte_coverage_ratio": 0.856801764435707,
+        "transition_predictability": 0.3775229357798165,
+        "window8_predictability": 0.4665137614678899,
+        "window32_predictability": 0.4981651376146789,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 50,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 0.82
+          },
+          {
+            "k": 100,
+            "reach_ratio": 0.96,
+            "same_prefix_ratio": 0.9
+          },
+          {
+            "k": 500,
+            "reach_ratio": 0.8,
+            "same_prefix_ratio": 0.756
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 0.762,
+            "same_prefix_ratio": 0.696
+          }
+        ]
+      }
+    },
+    {
+      "workflow": "git_checkout_live",
+      "command": "git checkout HEAD~5 -\u003e HEAD (hanzoai/vfs clone)",
+      "provenance": "live-strace-vm",
+      "run_n_events": 465,
+      "run_n_unique_chunks": 419,
+      "run_n_unique_bytes": 10372933,
+      "run_n1_events": 465,
+      "run_n1_unique_chunks": 419,
+      "run_n1_unique_bytes": 10372933,
+      "predictability_repeat": {
+        "workflow": "git_checkout_live",
+        "provenance": "live-strace-vm",
+        "scenario": "live_repeat",
+        "run_n_unique_chunks": 419,
+        "run_n1_unique_chunks": 419,
+        "shared_chunks": 418,
+        "union_chunks": 420,
+        "jaccard_similarity": 0.9952380952380953,
+        "run_n1_covered_by_run_n": 0.9976133651551312,
+        "run_n_used_by_run_n1": 0.9976133651551312,
+        "byte_coverage_ratio": 0.9973044268192998,
+        "transition_predictability": 0.9952153110047847,
+        "window8_predictability": 0.9952153110047847,
+        "window32_predictability": 0.9952153110047847,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 50,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 100,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 500,
+            "reach_ratio": 0.9976133651551312,
+            "same_prefix_ratio": 0.9976133651551312
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 0.9976133651551312,
+            "same_prefix_ratio": 0.9976133651551312
+          }
+        ]
+      },
+      "predictability_after_3_file_edit": {
+        "workflow": "git_checkout_live",
+        "provenance": "live-strace-vm",
+        "scenario": "live_plus_3_file_edit",
+        "run_n_unique_chunks": 419,
+        "run_n1_unique_chunks": 419,
+        "shared_chunks": 415,
+        "union_chunks": 423,
+        "jaccard_similarity": 0.9810874704491725,
+        "run_n1_covered_by_run_n": 0.9904534606205251,
+        "run_n_used_by_run_n1": 0.9904534606205251,
+        "byte_coverage_ratio": 0.9965228735209222,
+        "transition_predictability": 0.9043062200956937,
+        "window8_predictability": 0.9473684210526315,
+        "window32_predictability": 0.9473684210526315,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 50,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 100,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 0.99
+          },
+          {
+            "k": 500,
+            "reach_ratio": 0.9904534606205251,
+            "same_prefix_ratio": 0.9904534606205251
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 0.9904534606205251,
+            "same_prefix_ratio": 0.9904534606205251
+          }
+        ]
+      }
+    },
+    {
+      "workflow": "cargo_check_live",
+      "command": "cargo check --offline (12-module local crate)",
+      "provenance": "live-strace-vm",
+      "run_n_events": 2933,
+      "run_n_unique_chunks": 958,
+      "run_n_unique_bytes": 60629968,
+      "run_n1_events": 2934,
+      "run_n1_unique_chunks": 959,
+      "run_n1_unique_bytes": 60630128,
+      "predictability_repeat": {
+        "workflow": "cargo_check_live",
+        "provenance": "live-strace-vm",
+        "scenario": "live_repeat",
+        "run_n_unique_chunks": 958,
+        "run_n1_unique_chunks": 959,
+        "shared_chunks": 958,
+        "union_chunks": 959,
+        "jaccard_similarity": 0.9989572471324296,
+        "run_n1_covered_by_run_n": 0.9989572471324296,
+        "run_n_used_by_run_n1": 1,
+        "byte_coverage_ratio": 0.9999973610479596,
+        "transition_predictability": 0.9979123173277662,
+        "window8_predictability": 0.9979123173277662,
+        "window32_predictability": 0.9979123173277662,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 50,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 100,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 500,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 0.998
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 0.9989561586638831
+          }
+        ]
+      },
+      "predictability_after_3_file_edit": {
+        "workflow": "cargo_check_live",
+        "provenance": "live-strace-vm",
+        "scenario": "live_plus_3_file_edit",
+        "run_n_unique_chunks": 958,
+        "run_n1_unique_chunks": 959,
+        "shared_chunks": 953,
+        "union_chunks": 964,
+        "jaccard_similarity": 0.9885892116182573,
+        "run_n1_covered_by_run_n": 0.9937434827945777,
+        "run_n_used_by_run_n1": 0.9947807933194155,
+        "byte_coverage_ratio": 0.9969027444573431,
+        "transition_predictability": 0.8757828810020877,
+        "window8_predictability": 0.9352818371607515,
+        "window32_predictability": 0.9363256784968684,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 50,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 100,
+            "reach_ratio": 0.97,
+            "same_prefix_ratio": 0.97
+          },
+          {
+            "k": 500,
+            "reach_ratio": 0.992,
+            "same_prefix_ratio": 0.99
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 0.9947807933194155,
+            "same_prefix_ratio": 0.9937369519832986
+          }
+        ]
+      }
+    },
+    {
+      "workflow": "npm_ci",
+      "command": "npm ci --offline --ignore-scripts",
+      "provenance": "manifest-replay",
+      "run_n_events": 161,
+      "run_n_unique_chunks": 161,
+      "run_n_unique_bytes": 8393312,
+      "run_n1_events": 161,
+      "run_n1_unique_chunks": 161,
+      "run_n1_unique_bytes": 8393312,
+      "predictability_repeat": {
+        "workflow": "npm_ci",
+        "provenance": "manifest-replay",
+        "scenario": "repeat_identical",
+        "run_n_unique_chunks": 161,
+        "run_n1_unique_chunks": 161,
+        "shared_chunks": 161,
+        "union_chunks": 161,
+        "jaccard_similarity": 1,
+        "run_n1_covered_by_run_n": 1,
+        "run_n_used_by_run_n1": 1,
+        "byte_coverage_ratio": 1,
+        "transition_predictability": 0.8625,
+        "window8_predictability": 0.95,
+        "window32_predictability": 0.95,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 50,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 0.96
+          },
+          {
+            "k": 100,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 500,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          }
+        ]
+      },
+      "predictability_after_3_file_edit": {
+        "workflow": "npm_ci",
+        "provenance": "manifest-replay",
+        "scenario": "after_3_file_edit",
+        "run_n_unique_chunks": 161,
+        "run_n1_unique_chunks": 161,
+        "shared_chunks": 155,
+        "union_chunks": 167,
+        "jaccard_similarity": 0.9281437125748503,
+        "run_n1_covered_by_run_n": 0.9627329192546584,
+        "run_n_used_by_run_n1": 0.9627329192546584,
+        "byte_coverage_ratio": 0.9639172236180426,
+        "transition_predictability": 0.75625,
+        "window8_predictability": 0.8625,
+        "window32_predictability": 0.8625,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 50,
+            "reach_ratio": 0.94,
+            "same_prefix_ratio": 0.94
+          },
+          {
+            "k": 100,
+            "reach_ratio": 0.96,
+            "same_prefix_ratio": 0.96
+          },
+          {
+            "k": 500,
+            "reach_ratio": 0.9627329192546584,
+            "same_prefix_ratio": 0.9627329192546584
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 0.9627329192546584,
+            "same_prefix_ratio": 0.9627329192546584
+          }
+        ]
+      }
+    },
+    {
+      "workflow": "pnpm_install",
+      "command": "pnpm install --offline --frozen-lockfile",
+      "provenance": "manifest-replay",
+      "run_n_events": 161,
+      "run_n_unique_chunks": 161,
+      "run_n_unique_bytes": 8659226,
+      "run_n1_events": 161,
+      "run_n1_unique_chunks": 161,
+      "run_n1_unique_bytes": 8659226,
+      "predictability_repeat": {
+        "workflow": "pnpm_install",
+        "provenance": "manifest-replay",
+        "scenario": "repeat_identical",
+        "run_n_unique_chunks": 161,
+        "run_n1_unique_chunks": 161,
+        "shared_chunks": 161,
+        "union_chunks": 161,
+        "jaccard_similarity": 1,
+        "run_n1_covered_by_run_n": 1,
+        "run_n_used_by_run_n1": 1,
+        "byte_coverage_ratio": 1,
+        "transition_predictability": 0.6625,
+        "window8_predictability": 0.84375,
+        "window32_predictability": 0.85,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 0.9
+          },
+          {
+            "k": 50,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 0.98
+          },
+          {
+            "k": 100,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 500,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          }
+        ]
+      },
+      "predictability_after_3_file_edit": {
+        "workflow": "pnpm_install",
+        "provenance": "manifest-replay",
+        "scenario": "after_3_file_edit",
+        "run_n_unique_chunks": 161,
+        "run_n1_unique_chunks": 161,
+        "shared_chunks": 155,
+        "union_chunks": 167,
+        "jaccard_similarity": 0.9281437125748503,
+        "run_n1_covered_by_run_n": 0.9627329192546584,
+        "run_n_used_by_run_n1": 0.9627329192546584,
+        "byte_coverage_ratio": 0.9628823638509955,
+        "transition_predictability": 0.7875,
+        "window8_predictability": 0.85625,
+        "window32_predictability": 0.85625,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 50,
+            "reach_ratio": 0.96,
+            "same_prefix_ratio": 0.96
+          },
+          {
+            "k": 100,
+            "reach_ratio": 0.97,
+            "same_prefix_ratio": 0.97
+          },
+          {
+            "k": 500,
+            "reach_ratio": 0.9627329192546584,
+            "same_prefix_ratio": 0.9627329192546584
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 0.9627329192546584,
+            "same_prefix_ratio": 0.9627329192546584
+          }
+        ]
+      }
+    },
+    {
+      "workflow": "go_build_test",
+      "command": "go test -count=1 ./...",
+      "provenance": "manifest-replay",
+      "run_n_events": 154,
+      "run_n_unique_chunks": 154,
+      "run_n_unique_bytes": 7461075,
+      "run_n1_events": 154,
+      "run_n1_unique_chunks": 154,
+      "run_n1_unique_bytes": 7461075,
+      "predictability_repeat": {
+        "workflow": "go_build_test",
+        "provenance": "manifest-replay",
+        "scenario": "repeat_identical",
+        "run_n_unique_chunks": 154,
+        "run_n1_unique_chunks": 154,
+        "shared_chunks": 154,
+        "union_chunks": 154,
+        "jaccard_similarity": 1,
+        "run_n1_covered_by_run_n": 1,
+        "run_n_used_by_run_n1": 1,
+        "byte_coverage_ratio": 1,
+        "transition_predictability": 0.026143790849673203,
+        "window8_predictability": 0.22875816993464052,
+        "window32_predictability": 0.49019607843137253,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 0.4
+          },
+          {
+            "k": 50,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 0.96
+          },
+          {
+            "k": 100,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 0.97
+          },
+          {
+            "k": 500,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          }
+        ]
+      },
+      "predictability_after_3_file_edit": {
+        "workflow": "go_build_test",
+        "provenance": "manifest-replay",
+        "scenario": "after_3_file_edit",
+        "run_n_unique_chunks": 154,
+        "run_n1_unique_chunks": 154,
+        "shared_chunks": 145,
+        "union_chunks": 163,
+        "jaccard_similarity": 0.8895705521472392,
+        "run_n1_covered_by_run_n": 0.9415584415584416,
+        "run_n_used_by_run_n1": 0.9415584415584416,
+        "byte_coverage_ratio": 0.9350332224243826,
+        "transition_predictability": 0.4444444444444444,
+        "window8_predictability": 0.6013071895424836,
+        "window32_predictability": 0.6797385620915033,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 50,
+            "reach_ratio": 0.94,
+            "same_prefix_ratio": 0.94
+          },
+          {
+            "k": 100,
+            "reach_ratio": 0.94,
+            "same_prefix_ratio": 0.91
+          },
+          {
+            "k": 500,
+            "reach_ratio": 0.9415584415584416,
+            "same_prefix_ratio": 0.9415584415584416
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 0.9415584415584416,
+            "same_prefix_ratio": 0.9415584415584416
+          }
+        ]
+      }
+    },
+    {
+      "workflow": "cargo_check",
+      "command": "cargo check --offline --locked --all-targets",
+      "provenance": "manifest-replay",
+      "run_n_events": 159,
+      "run_n_unique_chunks": 159,
+      "run_n_unique_bytes": 8173255,
+      "run_n1_events": 159,
+      "run_n1_unique_chunks": 159,
+      "run_n1_unique_bytes": 8173255,
+      "predictability_repeat": {
+        "workflow": "cargo_check",
+        "provenance": "manifest-replay",
+        "scenario": "repeat_identical",
+        "run_n_unique_chunks": 159,
+        "run_n1_unique_chunks": 159,
+        "shared_chunks": 159,
+        "union_chunks": 159,
+        "jaccard_similarity": 1,
+        "run_n1_covered_by_run_n": 1,
+        "run_n_used_by_run_n1": 1,
+        "byte_coverage_ratio": 1,
+        "transition_predictability": 0.6139240506329114,
+        "window8_predictability": 0.8164556962025317,
+        "window32_predictability": 0.8227848101265823,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 50,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 100,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 0.98
+          },
+          {
+            "k": 500,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          }
+        ]
+      },
+      "predictability_after_3_file_edit": {
+        "workflow": "cargo_check",
+        "provenance": "manifest-replay",
+        "scenario": "after_3_file_edit",
+        "run_n_unique_chunks": 159,
+        "run_n1_unique_chunks": 159,
+        "shared_chunks": 153,
+        "union_chunks": 165,
+        "jaccard_similarity": 0.9272727272727272,
+        "run_n1_covered_by_run_n": 0.9622641509433962,
+        "run_n_used_by_run_n1": 0.9622641509433962,
+        "byte_coverage_ratio": 0.9632977314423691,
+        "transition_predictability": 0.4873417721518987,
+        "window8_predictability": 0.7341772151898734,
+        "window32_predictability": 0.7341772151898734,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 0.8
+          },
+          {
+            "k": 50,
+            "reach_ratio": 0.94,
+            "same_prefix_ratio": 0.94
+          },
+          {
+            "k": 100,
+            "reach_ratio": 0.94,
+            "same_prefix_ratio": 0.94
+          },
+          {
+            "k": 500,
+            "reach_ratio": 0.9622641509433962,
+            "same_prefix_ratio": 0.9622641509433962
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 0.9622641509433962,
+            "same_prefix_ratio": 0.9622641509433962
+          }
+        ]
+      }
+    },
+    {
+      "workflow": "uv_sync",
+      "command": "uv sync --offline --frozen",
+      "provenance": "manifest-replay",
+      "run_n_events": 154,
+      "run_n_unique_chunks": 154,
+      "run_n_unique_bytes": 7904231,
+      "run_n1_events": 154,
+      "run_n1_unique_chunks": 154,
+      "run_n1_unique_bytes": 7904231,
+      "predictability_repeat": {
+        "workflow": "uv_sync",
+        "provenance": "manifest-replay",
+        "scenario": "repeat_identical",
+        "run_n_unique_chunks": 154,
+        "run_n1_unique_chunks": 154,
+        "shared_chunks": 154,
+        "union_chunks": 154,
+        "jaccard_similarity": 1,
+        "run_n1_covered_by_run_n": 1,
+        "run_n_used_by_run_n1": 1,
+        "byte_coverage_ratio": 1,
+        "transition_predictability": 0.673202614379085,
+        "window8_predictability": 0.869281045751634,
+        "window32_predictability": 0.869281045751634,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 0.9
+          },
+          {
+            "k": 50,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 100,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 500,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          }
+        ]
+      },
+      "predictability_after_3_file_edit": {
+        "workflow": "uv_sync",
+        "provenance": "manifest-replay",
+        "scenario": "after_3_file_edit",
+        "run_n_unique_chunks": 154,
+        "run_n1_unique_chunks": 154,
+        "shared_chunks": 148,
+        "union_chunks": 160,
+        "jaccard_similarity": 0.925,
+        "run_n1_covered_by_run_n": 0.961038961038961,
+        "run_n_used_by_run_n1": 0.961038961038961,
+        "byte_coverage_ratio": 0.9650412544876282,
+        "transition_predictability": 0.8431372549019608,
+        "window8_predictability": 0.8888888888888888,
+        "window32_predictability": 0.8888888888888888,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 50,
+            "reach_ratio": 0.94,
+            "same_prefix_ratio": 0.94
+          },
+          {
+            "k": 100,
+            "reach_ratio": 0.95,
+            "same_prefix_ratio": 0.95
+          },
+          {
+            "k": 500,
+            "reach_ratio": 0.961038961038961,
+            "same_prefix_ratio": 0.961038961038961
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 0.961038961038961,
+            "same_prefix_ratio": 0.961038961038961
+          }
+        ]
+      }
+    },
+    {
+      "workflow": "git_checkout",
+      "command": "git checkout HEAD~1 -- .",
+      "provenance": "manifest-replay",
+      "run_n_events": 173,
+      "run_n_unique_chunks": 173,
+      "run_n_unique_bytes": 9106247,
+      "run_n1_events": 173,
+      "run_n1_unique_chunks": 173,
+      "run_n1_unique_bytes": 9106247,
+      "predictability_repeat": {
+        "workflow": "git_checkout",
+        "provenance": "manifest-replay",
+        "scenario": "repeat_identical",
+        "run_n_unique_chunks": 173,
+        "run_n1_unique_chunks": 173,
+        "shared_chunks": 173,
+        "union_chunks": 173,
+        "jaccard_similarity": 1,
+        "run_n1_covered_by_run_n": 1,
+        "run_n_used_by_run_n1": 1,
+        "byte_coverage_ratio": 1,
+        "transition_predictability": 0.9534883720930233,
+        "window8_predictability": 0.9825581395348837,
+        "window32_predictability": 0.9825581395348837,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 50,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 100,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 500,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          }
+        ]
+      },
+      "predictability_after_3_file_edit": {
+        "workflow": "git_checkout",
+        "provenance": "manifest-replay",
+        "scenario": "after_3_file_edit",
+        "run_n_unique_chunks": 173,
+        "run_n1_unique_chunks": 173,
+        "shared_chunks": 166,
+        "union_chunks": 180,
+        "jaccard_similarity": 0.9222222222222223,
+        "run_n1_covered_by_run_n": 0.9595375722543352,
+        "run_n_used_by_run_n1": 0.9595375722543352,
+        "byte_coverage_ratio": 0.9564343027374504,
+        "transition_predictability": 0.9418604651162791,
+        "window8_predictability": 0.9418604651162791,
+        "window32_predictability": 0.9418604651162791,
+        "prefix_overlaps": [
+          {
+            "k": 10,
+            "reach_ratio": 1,
+            "same_prefix_ratio": 1
+          },
+          {
+            "k": 50,
+            "reach_ratio": 0.98,
+            "same_prefix_ratio": 0.98
+          },
+          {
+            "k": 100,
+            "reach_ratio": 0.99,
+            "same_prefix_ratio": 0.99
+          },
+          {
+            "k": 500,
+            "reach_ratio": 0.9595375722543352,
+            "same_prefix_ratio": 0.9595375722543352
+          },
+          {
+            "k": 1000,
+            "reach_ratio": 0.9595375722543352,
+            "same_prefix_ratio": 0.9595375722543352
+          }
+        ]
+      }
+    }
+  ]
+}
