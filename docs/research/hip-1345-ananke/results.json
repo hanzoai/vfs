@@ -1,0 +1,241 @@
+{
+  "schema_version": "1.0",
+  "hip": "HIP-1345 / HIP-1344 (#53 / #65)",
+  "timestamp_utc": "2026-11-26T15:38:49Z",
+  "seed": 1345,
+  "honesty_note": "All figures are measured on the authoring Linux host using real OS-backed files, real fsync(), and an in-process supervisor /dev/fuse channel harness (no kernel /dev/fuse mount required). They represent clean-room authoring-host results, not Hanzo production SLA claims until reproduced on Hanzo target hardware.",
+  "environment": {
+    "goos": "linux",
+    "goarch": "amd64",
+    "go_version": "go1.27.1",
+    "num_cpu": 2
+  },
+  "mttr_comparison": {
+    "workspace_files": 500,
+    "open_handles": 20,
+    "orphan_handles": 4,
+    "iterations": 30,
+    "ananke_buffered_restart_mttr": {
+      "count": 30,
+      "min_ms": 1.777,
+      "p50_ms": 6.447,
+      "p95_ms": 10.577,
+      "p99_ms": 12.261,
+      "max_ms": 12.261,
+      "avg_ms": 6.669
+    },
+    "ananke_sync_restart_mttr": {
+      "count": 30,
+      "min_ms": 13.31,
+      "p50_ms": 18.881,
+      "p95_ms": 25.084,
+      "p99_ms": 25.95,
+      "max_ms": 25.95,
+      "avg_ms": 18.833
+    },
+    "cold_remount_service_mttr": {
+      "count": 30,
+      "min_ms": 2.352,
+      "p50_ms": 2.804,
+      "p95_ms": 4.926,
+      "p99_ms": 11.232,
+      "max_ms": 11.232,
+      "avg_ms": 3.253
+    },
+    "cold_remount_end_to_end_mttr": {
+      "count": 30,
+      "min_ms": 2.683,
+      "p50_ms": 3.115,
+      "p95_ms": 5.712,
+      "p99_ms": 7.557,
+      "max_ms": 7.557,
+      "avg_ms": 3.47
+    },
+    "ananke_handle_survival_pct": 100,
+    "ananke_orphan_survival_pct": 100,
+    "cold_handle_survival_pct": 0,
+    "cold_orphan_survival_pct": 0,
+    "ananke_unmounts": 0,
+    "cold_unmounts": 30,
+    "speedup_p50_vs_cold_end_to_end": 0.483,
+    "speedup_p99_vs_cold_end_to_end": 0.616
+  },
+  "fsync_durability": {
+    "crashes_injected": 150,
+    "active_files": 4,
+    "fsyncs_acknowledged": 150,
+    "fsyncs_verified": 150,
+    "fsyncs_lost": 0,
+    "durability_rate_pct": 100,
+    "unflushed_dirty_staged": 150,
+    "unflushed_dirty_dropped": 150,
+    "unmounts": 0,
+    "remaining_open_fds_after_test": 0
+  },
+  "open_handle_matrix": [
+    {
+      "scenario": "regular_rw_open_handle",
+      "expected_behavior": "Survives SIGKILL without unmount; reads acknowledged bytes",
+      "observed_behavior": "read=\"reg-v1\" err=\u003cnil\u003e",
+      "passed": true
+    },
+    {
+      "scenario": "append_handle_idempotent_retry",
+      "expected_behavior": "Retried reqID=5 deduplicated; no duplicate append",
+      "observed_behavior": "dedup=true content=\"A1\\n\" err=\u003cnil\u003e",
+      "passed": true
+    },
+    {
+      "scenario": "unlinked_open_orphan_handle",
+      "expected_behavior": "Remains readable across crash via .ananke-orphans and cleans up on Release",
+      "observed_behavior": "read=\"orphan-bytes\" release_err=\u003cnil\u003e",
+      "passed": true
+    },
+    {
+      "scenario": "stale_deleted_inode_rejection",
+      "expected_behavior": "Returns ErrStaleInode (POSIX ESTALE)",
+      "observed_behavior": "err=fuserecovery: stale inode errno=stale file handle",
+      "passed": true
+    },
+    {
+      "scenario": "cross_tenant_handle_isolation",
+      "expected_behavior": "Rejects foreign tenant with ErrTenantMismatch (POSIX EACCES)",
+      "observed_behavior": "err=fuserecovery: tenant isolation violation errno=permission denied",
+      "passed": true
+    }
+  ],
+  "steady_state_overhead": {
+    "balanced_rw_fsync_workload": [
+      {
+        "mode": "disabled",
+        "operations": 100,
+        "total_elapsed_ms": 965.715,
+        "throughput_ops_sec": 103.55,
+        "op_latency": {
+          "count": 100,
+          "min_ms": 4.621,
+          "p50_ms": 8.483,
+          "p95_ms": 14.116,
+          "p99_ms": 20.135,
+          "max_ms": 51.681,
+          "avg_ms": 9.656
+        },
+        "overhead_vs_baseline_pct": 0,
+        "checkpoint_saves": 0,
+        "checkpoint_bytes": 0
+      },
+      {
+        "mode": "buffered",
+        "operations": 100,
+        "total_elapsed_ms": 1810.488,
+        "throughput_ops_sec": 55.23,
+        "op_latency": {
+          "count": 100,
+          "min_ms": 10.57,
+          "p50_ms": 17.818,
+          "p95_ms": 26.339,
+          "p99_ms": 28.416,
+          "max_ms": 28.479,
+          "avg_ms": 18.104
+        },
+        "overhead_vs_baseline_pct": 46.66,
+        "checkpoint_saves": 301,
+        "checkpoint_bytes": 14869209
+      },
+      {
+        "mode": "sync",
+        "operations": 100,
+        "total_elapsed_ms": 3906.307,
+        "throughput_ops_sec": 25.6,
+        "op_latency": {
+          "count": 100,
+          "min_ms": 29.998,
+          "p50_ms": 38.23,
+          "p95_ms": 48.003,
+          "p99_ms": 48.779,
+          "max_ms": 49.622,
+          "avg_ms": 39.062
+        },
+        "overhead_vs_baseline_pct": 75.28,
+        "checkpoint_saves": 301,
+        "checkpoint_bytes": 14868005
+      }
+    ],
+    "high_churn_tiny_open_negative_regime": [
+      {
+        "mode": "disabled",
+        "operations": 150,
+        "total_elapsed_ms": 6.653,
+        "throughput_ops_sec": 22546.22,
+        "op_latency": {
+          "count": 150,
+          "min_ms": 0,
+          "p50_ms": 0.018,
+          "p95_ms": 0.036,
+          "p99_ms": 1.769,
+          "max_ms": 1.963,
+          "avg_ms": 0.044
+        },
+        "overhead_vs_baseline_pct": 0,
+        "checkpoint_saves": 0,
+        "checkpoint_bytes": 0
+      },
+      {
+        "mode": "buffered",
+        "operations": 150,
+        "total_elapsed_ms": 191.871,
+        "throughput_ops_sec": 781.78,
+        "op_latency": {
+          "count": 150,
+          "min_ms": 0,
+          "p50_ms": 1.01,
+          "p95_ms": 3.023,
+          "p99_ms": 6.762,
+          "max_ms": 8.266,
+          "avg_ms": 1.296
+        },
+        "overhead_vs_baseline_pct": 96.53,
+        "checkpoint_saves": 331,
+        "checkpoint_bytes": 1888911
+      },
+      {
+        "mode": "sync",
+        "operations": 150,
+        "total_elapsed_ms": 2953.526,
+        "throughput_ops_sec": 50.79,
+        "op_latency": {
+          "count": 150,
+          "min_ms": 13.447,
+          "p50_ms": 18.769,
+          "p95_ms": 26.344,
+          "p99_ms": 31.42,
+          "max_ms": 31.692,
+          "avg_ms": 19.689
+        },
+        "overhead_vs_baseline_pct": 99.77,
+        "checkpoint_saves": 331,
+        "checkpoint_bytes": 1887587
+      }
+    ]
+  },
+  "negative_regimes": [
+    {
+      "scenario": "host_kernel_crash_vs_process_crash",
+      "returned_error": "fuserecovery: fuse fd handoff unavailable: mount=\"/mnt/neg-kernel\" alive=false",
+      "expected_degraded": true,
+      "degraded_fallbacks": 1,
+      "cold_remounts_required": 1,
+      "mount_alive": false,
+      "passed": true
+    },
+    {
+      "scenario": "fuse_fd_handoff_unavailable",
+      "returned_error": "fuserecovery: fuse fd handoff unavailable: mount=\"/mnt/neg-handoff\" alive=false",
+      "expected_degraded": true,
+      "degraded_fallbacks": 1,
+      "cold_remounts_required": 1,
+      "mount_alive": false,
+      "passed": true
+    }
+  ]
+}
