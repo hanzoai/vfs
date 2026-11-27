@@ -1,0 +1,758 @@
+{
+  "issue": "hanzoai/vfs#29",
+  "hip": "HIP-1342",
+  "generated_at": "2026-11-26T21:18:58.72393743Z",
+  "go_version": "go1.27.1",
+  "git_version": "git version 2.56.1",
+  "os": "linux",
+  "arch": "amd64",
+  "cpus": 2,
+  "fsmonitor_supported": true,
+  "fuse_mount_used": true,
+  "config": {
+    "src_repo": "/home/antigravity/Boxxji/vfs",
+    "extra_files": 400,
+    "bulk_stage_files": 200,
+    "seed": 1342,
+    "repetitions": 3,
+    "cow_sandboxes": 4,
+    "sparse_cones": [
+      "pkg/gitvfs",
+      "corpus/core"
+    ],
+    "use_fuse_mount": true,
+    "put_delay_ns": 0
+  },
+  "corpus_commit_sha": "db27b7cf6fef34304ef447300345e1ba1f5c0646",
+  "corpus_files": 710,
+  "nvme_probe": {
+    "dir": "/tmp/gitvfs-bench-206964553",
+    "iterations": 40,
+    "fsync_p50_us": 4619.654,
+    "fsync_p95_us": 8297.186,
+    "fsync_mean_us": 5570.764225,
+    "create_p50_us": 48.491,
+    "stat_p50_us": 8.122,
+    "rename_p50_us": 29.957,
+    "unlink_p50_us": 28.876
+  },
+  "forge_status": {
+    "path": "/tmp/gitvfs-bench-206964553/forge.git",
+    "protocol_version": "2",
+    "allow_filter": true,
+    "allow_any_sha1_in_want": true,
+    "has_bitmap_index": true,
+    "has_commit_graph": true,
+    "has_multi_pack_index": true,
+    "fsck_clean": true,
+    "pack_count": 2,
+    "loose_object_count": 0,
+    "default_branch_commit_id": "db27b7cf6fef34304ef447300345e1ba1f5c0646"
+  },
+  "close_publish_check": {
+    "puts_during_write_sync_close": 0,
+    "publish_latency_ms": 540.667,
+    "publish_puts": 3,
+    "publish_bytes": 32289,
+    "zero_sync_put_on_close": true,
+    "published_within_bound": true,
+    "bound": 5000000000
+  },
+  "modes": [
+    {
+      "mode": "plain-nvme-untuned",
+      "storage_layer": "plain-nvme",
+      "profile_name": "untuned",
+      "clone_to_first_cmd_ms": 525.535,
+      "clone_ms": 462.015,
+      "status_cold_ms": 63.52,
+      "status_warm_ms": 61.849,
+      "checkout_ms": 448.499,
+      "commit_ms": 55.756,
+      "push_ms": 84.336,
+      "commit_and_push_ms": 140.092,
+      "flush_ms": 0,
+      "own_git_objects": 849,
+      "own_git_kb": 1062,
+      "tracked_files": 711,
+      "worktree_files": 711,
+      "journal_fsyncs": 0,
+      "journal_fsync_p50_us": 4619.654,
+      "fsync_ratio_vs_nvme": 1,
+      "total_vfs_puts": 0,
+      "total_vfs_put_bytes": 0,
+      "pack_puts": 0,
+      "meta_puts": 0,
+      "head_puts": 0,
+      "ops": {
+        "checkout": {
+          "wall_ms": 448.499,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        },
+        "clone": {
+          "wall_ms": 462.015,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        },
+        "commit_and_push": {
+          "wall_ms": 140.092,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        },
+        "status_cold": {
+          "wall_ms": 63.52,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        },
+        "status_warm": {
+          "wall_ms": 61.849,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        }
+      }
+    },
+    {
+      "mode": "plain-nvme-tuned",
+      "storage_layer": "plain-nvme",
+      "profile_name": "tuned-fast",
+      "clone_to_first_cmd_ms": 420.275,
+      "clone_ms": 382.532,
+      "status_cold_ms": 37.743,
+      "status_warm_ms": 38.546,
+      "checkout_ms": 97.56,
+      "commit_ms": 31.635,
+      "push_ms": 70.426,
+      "commit_and_push_ms": 102.061,
+      "flush_ms": 0,
+      "own_git_objects": 849,
+      "own_git_kb": 1061,
+      "tracked_files": 711,
+      "worktree_files": 711,
+      "journal_fsyncs": 0,
+      "journal_fsync_p50_us": 4619.654,
+      "fsync_ratio_vs_nvme": 1,
+      "total_vfs_puts": 0,
+      "total_vfs_put_bytes": 0,
+      "pack_puts": 0,
+      "meta_puts": 0,
+      "head_puts": 0,
+      "ops": {
+        "checkout": {
+          "wall_ms": 97.56,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        },
+        "clone": {
+          "wall_ms": 382.532,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        },
+        "commit_and_push": {
+          "wall_ms": 102.061,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        },
+        "status_cold": {
+          "wall_ms": 37.743,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        },
+        "status_warm": {
+          "wall_ms": 38.546,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        }
+      }
+    },
+    {
+      "mode": "vfs-untuned",
+      "storage_layer": "vfs-fuse",
+      "profile_name": "untuned",
+      "clone_to_first_cmd_ms": 2320.398,
+      "clone_ms": 1835.024,
+      "status_cold_ms": 485.374,
+      "status_warm_ms": 265.095,
+      "checkout_ms": 1190.224,
+      "commit_ms": 245.194,
+      "push_ms": 150.15,
+      "commit_and_push_ms": 395.345,
+      "flush_ms": 195.953,
+      "own_git_objects": 849,
+      "own_git_kb": 1062,
+      "tracked_files": 711,
+      "worktree_files": 711,
+      "journal_fsyncs": 11,
+      "journal_fsync_p50_us": 2503.048,
+      "fsync_ratio_vs_nvme": 0.5418258596855954,
+      "total_vfs_puts": 60,
+      "total_vfs_put_bytes": 6856472,
+      "pack_puts": 2,
+      "meta_puts": 56,
+      "head_puts": 2,
+      "ops": {
+        "checkout": {
+          "wall_ms": 1190.224,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 2
+        },
+        "clone": {
+          "wall_ms": 1835.024,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 4
+        },
+        "commit_and_push": {
+          "wall_ms": 395.345,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        },
+        "flush": {
+          "wall_ms": 195.953,
+          "total_puts": 30,
+          "pack_puts": 1,
+          "meta_puts": 28,
+          "head_puts": 1,
+          "put_bytes": 2228744,
+          "journal_syncs": 1
+        },
+        "status_cold": {
+          "wall_ms": 485.374,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        },
+        "status_warm": {
+          "wall_ms": 265.095,
+          "total_puts": 17,
+          "pack_puts": 1,
+          "meta_puts": 16,
+          "head_puts": 0,
+          "put_bytes": 3794886,
+          "journal_syncs": 0
+        }
+      }
+    },
+    {
+      "mode": "vfs-tuned",
+      "storage_layer": "vfs-fuse",
+      "profile_name": "tuned-fast",
+      "clone_to_first_cmd_ms": 1565.286,
+      "clone_ms": 1207.346,
+      "status_cold_ms": 357.94,
+      "status_warm_ms": 107.82,
+      "checkout_ms": 1171.436,
+      "commit_ms": 98.388,
+      "push_ms": 156.68,
+      "commit_and_push_ms": 255.069,
+      "flush_ms": 185.727,
+      "own_git_objects": 849,
+      "own_git_kb": 1061,
+      "tracked_files": 711,
+      "worktree_files": 711,
+      "journal_fsyncs": 8,
+      "journal_fsync_p50_us": 6278.838,
+      "fsync_ratio_vs_nvme": 1.3591576338834033,
+      "total_vfs_puts": 54,
+      "total_vfs_put_bytes": 6687778,
+      "pack_puts": 2,
+      "meta_puts": 50,
+      "head_puts": 2,
+      "ops": {
+        "checkout": {
+          "wall_ms": 1171.436,
+          "total_puts": 31,
+          "pack_puts": 1,
+          "meta_puts": 29,
+          "head_puts": 1,
+          "put_bytes": 4954511,
+          "journal_syncs": 1
+        },
+        "clone": {
+          "wall_ms": 1207.346,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 3
+        },
+        "commit_and_push": {
+          "wall_ms": 255.069,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        },
+        "flush": {
+          "wall_ms": 185.727,
+          "total_puts": 23,
+          "pack_puts": 1,
+          "meta_puts": 21,
+          "head_puts": 1,
+          "put_bytes": 1733267,
+          "journal_syncs": 1
+        },
+        "status_cold": {
+          "wall_ms": 357.94,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        },
+        "status_warm": {
+          "wall_ms": 107.82,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        }
+      }
+    },
+    {
+      "mode": "vfs-tuned-batched-fsync",
+      "storage_layer": "vfs-fuse",
+      "profile_name": "tuned",
+      "clone_to_first_cmd_ms": 1655.1860000000001,
+      "clone_ms": 1430.265,
+      "status_cold_ms": 224.921,
+      "status_warm_ms": 398.098,
+      "checkout_ms": 811.127,
+      "commit_ms": 275.601,
+      "push_ms": 108.132,
+      "commit_and_push_ms": 383.734,
+      "flush_ms": 172.42,
+      "own_git_objects": 849,
+      "own_git_kb": 1061,
+      "tracked_files": 711,
+      "worktree_files": 711,
+      "journal_fsyncs": 17,
+      "journal_fsync_p50_us": 2444.218,
+      "fsync_ratio_vs_nvme": 0.5290911397260487,
+      "total_vfs_puts": 60,
+      "total_vfs_put_bytes": 6795942,
+      "pack_puts": 2,
+      "meta_puts": 56,
+      "head_puts": 2,
+      "ops": {
+        "checkout": {
+          "wall_ms": 811.127,
+          "total_puts": 31,
+          "pack_puts": 1,
+          "meta_puts": 29,
+          "head_puts": 1,
+          "put_bytes": 4953148,
+          "journal_syncs": 2
+        },
+        "clone": {
+          "wall_ms": 1430.265,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 5
+        },
+        "commit_and_push": {
+          "wall_ms": 383.734,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 5
+        },
+        "flush": {
+          "wall_ms": 172.42,
+          "total_puts": 29,
+          "pack_puts": 1,
+          "meta_puts": 27,
+          "head_puts": 1,
+          "put_bytes": 1842794,
+          "journal_syncs": 1
+        },
+        "status_cold": {
+          "wall_ms": 224.921,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        },
+        "status_warm": {
+          "wall_ms": 398.098,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        }
+      }
+    },
+    {
+      "mode": "vfs-reference-alternates",
+      "storage_layer": "vfs-fuse",
+      "profile_name": "reference",
+      "clone_to_first_cmd_ms": 1903.379,
+      "clone_ms": 1551.062,
+      "status_cold_ms": 352.317,
+      "status_warm_ms": 68.578,
+      "checkout_ms": 1295.594,
+      "commit_ms": 68.867,
+      "push_ms": 224.8,
+      "commit_and_push_ms": 293.667,
+      "flush_ms": 212.872,
+      "own_git_objects": 0,
+      "own_git_kb": 1,
+      "tracked_files": 711,
+      "worktree_files": 711,
+      "journal_fsyncs": 4,
+      "journal_fsync_p50_us": 2976.069,
+      "fsync_ratio_vs_nvme": 0.6442190259270498,
+      "total_vfs_puts": 74,
+      "total_vfs_put_bytes": 5318059,
+      "pack_puts": 2,
+      "meta_puts": 70,
+      "head_puts": 2,
+      "ops": {
+        "checkout": {
+          "wall_ms": 1295.594,
+          "total_puts": 19,
+          "pack_puts": 0,
+          "meta_puts": 18,
+          "head_puts": 1,
+          "put_bytes": 863591,
+          "journal_syncs": 1
+        },
+        "clone": {
+          "wall_ms": 1551.062,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 2
+        },
+        "commit_and_push": {
+          "wall_ms": 293.667,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        },
+        "flush": {
+          "wall_ms": 212.872,
+          "total_puts": 34,
+          "pack_puts": 1,
+          "meta_puts": 32,
+          "head_puts": 1,
+          "put_bytes": 1834820,
+          "journal_syncs": 1
+        },
+        "status_cold": {
+          "wall_ms": 352.317,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        },
+        "status_warm": {
+          "wall_ms": 68.578,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        }
+      },
+      "alternates_verified": true
+    },
+    {
+      "mode": "vfs-reference-sparse",
+      "storage_layer": "vfs-fuse",
+      "profile_name": "reference-sparse",
+      "clone_to_first_cmd_ms": 1387.217,
+      "clone_ms": 1283.131,
+      "status_cold_ms": 104.086,
+      "status_warm_ms": 138.038,
+      "checkout_ms": 367.16,
+      "commit_ms": 172.448,
+      "push_ms": 290.38,
+      "commit_and_push_ms": 462.829,
+      "flush_ms": 38.356,
+      "own_git_objects": 0,
+      "own_git_kb": 1,
+      "tracked_files": 711,
+      "worktree_files": 173,
+      "journal_fsyncs": 4,
+      "journal_fsync_p50_us": 2276.37,
+      "fsync_ratio_vs_nvme": 0.49275768271822945,
+      "total_vfs_puts": 18,
+      "total_vfs_put_bytes": 1310406,
+      "pack_puts": 2,
+      "meta_puts": 14,
+      "head_puts": 2,
+      "ops": {
+        "checkout": {
+          "wall_ms": 367.16,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        },
+        "clone": {
+          "wall_ms": 1283.131,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 2
+        },
+        "commit_and_push": {
+          "wall_ms": 462.829,
+          "total_puts": 12,
+          "pack_puts": 1,
+          "meta_puts": 10,
+          "head_puts": 1,
+          "put_bytes": 1153778,
+          "journal_syncs": 1
+        },
+        "flush": {
+          "wall_ms": 38.356,
+          "total_puts": 6,
+          "pack_puts": 1,
+          "meta_puts": 4,
+          "head_puts": 1,
+          "put_bytes": 156628,
+          "journal_syncs": 1
+        },
+        "status_cold": {
+          "wall_ms": 104.086,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        },
+        "status_warm": {
+          "wall_ms": 138.038,
+          "total_puts": 0,
+          "pack_puts": 0,
+          "meta_puts": 0,
+          "head_puts": 0,
+          "put_bytes": 0,
+          "journal_syncs": 0
+        }
+      },
+      "alternates_verified": true
+    }
+  ],
+  "fsync_batch_matrix": [
+    {
+      "storage": "plain-nvme",
+      "strategy": "default (no loose-object fsync)",
+      "staged_files": 200,
+      "add_wall_ms": 72.608,
+      "commit_wall_ms": 49.128,
+      "strace_fsyncs": 0,
+      "journal_syncs": 0,
+      "journal_sync_p50_us": 4619.654,
+      "fsync_ratio_vs_nvme": 1,
+      "vfs_backend_puts": 0
+    },
+    {
+      "storage": "plain-nvme",
+      "strategy": "core.fsync=committed (unbatched)",
+      "staged_files": 200,
+      "add_wall_ms": 1093.862,
+      "commit_wall_ms": 39.146,
+      "strace_fsyncs": 150,
+      "journal_syncs": 0,
+      "journal_sync_p50_us": 4619.654,
+      "fsync_ratio_vs_nvme": 1,
+      "vfs_backend_puts": 0
+    },
+    {
+      "storage": "plain-nvme",
+      "strategy": "core.fsync=committed + core.fsyncMethod=batch",
+      "staged_files": 200,
+      "add_wall_ms": 103.819,
+      "commit_wall_ms": 61.249,
+      "strace_fsyncs": 1,
+      "journal_syncs": 0,
+      "journal_sync_p50_us": 4619.654,
+      "fsync_ratio_vs_nvme": 1,
+      "vfs_backend_puts": 0
+    },
+    {
+      "storage": "vfs-fuse",
+      "strategy": "default (no loose-object fsync)",
+      "staged_files": 200,
+      "add_wall_ms": 578.415,
+      "commit_wall_ms": 117.749,
+      "strace_fsyncs": -1,
+      "journal_syncs": 0,
+      "journal_sync_p50_us": 2239.375,
+      "fsync_ratio_vs_nvme": 0.4847495072141766,
+      "vfs_backend_puts": 0
+    },
+    {
+      "storage": "vfs-fuse",
+      "strategy": "core.fsync=committed (unbatched)",
+      "staged_files": 200,
+      "add_wall_ms": 1728.813,
+      "commit_wall_ms": 166.26,
+      "strace_fsyncs": -1,
+      "journal_syncs": 204,
+      "journal_sync_p50_us": 1959.55,
+      "fsync_ratio_vs_nvme": 0.4241767889976175,
+      "vfs_backend_puts": 0
+    },
+    {
+      "storage": "vfs-fuse",
+      "strategy": "core.fsync=committed + core.fsyncMethod=batch",
+      "staged_files": 200,
+      "add_wall_ms": 1012.874,
+      "commit_wall_ms": 88.788,
+      "strace_fsyncs": -1,
+      "journal_syncs": 4,
+      "journal_sync_p50_us": 2525.728,
+      "fsync_ratio_vs_nvme": 0.5467353182727537,
+      "vfs_backend_puts": 0
+    }
+  ],
+  "cow_clone": {
+    "sandboxes": 4,
+    "base_files": 740,
+    "base_bytes": 4383388,
+    "base_build_ms": 517.889,
+    "base_total_puts": 32,
+    "base_pack_puts": 1,
+    "base_meta_puts": 27,
+    "median_clone_ms": 47.109,
+    "max_clone_ms": 58.264,
+    "clone_head_puts_each": 2,
+    "clone_pack_puts_each": 0,
+    "clone_meta_puts_each": 0,
+    "base_writes_during_clone": 0,
+    "post_clone_status_ms": 55.026,
+    "post_clone_commit_push_ms": 115.912,
+    "delta_flush_puts": 5,
+    "delta_flush_bytes": 422446
+  },
+  "negative_regimes": [
+    {
+      "id": "NR-1",
+      "name": "Tiny 5-file repository setup overhead",
+      "summary": "Running commit-graph + multi-pack-index + local config tuning on a 5-file repo adds extra git process invocations without recovering the cost on status/checkout.",
+      "baseline_label": "plain clone + status (5 files)",
+      "baseline_ms": 72.328,
+      "variant_label": "tuned clone + commit-graph + MIDX + status (5 files)",
+      "variant_ms": 114.368,
+      "regression_pct": 58.124101316226074,
+      "details": {
+        "files": 5,
+        "seed": 1342
+      }
+    },
+    {
+      "id": "NR-2",
+      "name": "Full-history git log -S over blobless partial clone (--filter=blob:none)",
+      "summary": "History content search (`git log -S`) on a blobless partial clone forces synchronous on-demand promisor fetches for historical blobs from the forge, regressing wall time vs a full clone.",
+      "baseline_label": "full clone `git log -n 25 -S Volume`",
+      "baseline_ms": 52.073,
+      "variant_label": "blobless partial clone `git log -n 25 -S Volume`",
+      "variant_ms": 2751.142,
+      "regression_pct": 5183.240834981661,
+      "details": {
+        "matches_blobless": 8,
+        "matches_full": 8
+      }
+    },
+    {
+      "id": "NR-3",
+      "name": "Shared alternates git gc --prune=now hazard",
+      "summary": "Pruning unreachable objects in a shared alternates store while live non-dissociated sandboxes still reference it corrupts borrower git fsck. SafePrune() blocks pruning until all borrowers dissociate.",
+      "baseline_label": "borrower fsck before store prune (healthy)",
+      "baseline_ms": 0,
+      "variant_label": "borrower fsck after forced store prune (broken)",
+      "variant_ms": 0,
+      "regression_pct": 0,
+      "details": {
+        "borrower_fsck_failed_after_forced_prune": true,
+        "safe_prune_blocked_with_active_borrower": true
+      }
+    }
+  ]
+}
