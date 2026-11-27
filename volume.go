@@ -1359,7 +1359,9 @@ func (v *Volume) replay(ctx context.Context, c *change, seq uint64) error {
 // hold the root directory, which refuses a copy that lacks its objects, a Head of another
 // Volume, and an object of another kind that a store writer put where the Head goes.
 // cfg.Verify reads every shard the Head reaches and checks that every pack a chunk is in
-// is there and long enough; chunks are checked when a file is read.
+// is there and long enough; chunks are checked when a file is read, and a pack whose bytes
+// changed under a chunk no file has read since passes this check. Verify (integrity.go)
+// reads every chunk and reports what it finds, before a Reseal is asked to bless a copy.
 func Reseal(ctx context.Context, cfg Config, from string) error {
 	cfg, err := cfg.valid()
 	if err != nil {

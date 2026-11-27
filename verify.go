@@ -15,7 +15,8 @@ import (
 // every shard the Head reaches (each is checked against its name and opened) and checks that
 // every pack a chunk lives in is there and long enough to hold it, and that every chunk
 // a file refers to is in the chunk table. It reads no chunk: a chunk is checked against its
-// hash when a file is read.
+// hash when a file is read, so a pack that changed under a chunk no file has read since is
+// whole as far as this walk can tell. Verify (integrity.go) reads the chunks and says so.
 func (v *Volume) checkTree(ctx context.Context, full bool) error {
 	_, ok, err := v.t.get(ctx, v.root, keyInode(RootInode))
 	if err != nil {
