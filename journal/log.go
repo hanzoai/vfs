@@ -331,6 +331,18 @@ func Discard(dir string, opt Options, first, last uint64) (err error) {
 			return err
 		}
 	}
+	if opt.Integrity != nil && opt.Integrity.Mode != ModeNone && opt.Integrity.Mode != ModeAEADOnlyBaseline {
+		cfg := *opt.Integrity
+		if cfg.ProbeDir == "" && dir != "" {
+			cfg.ProbeDir = dir
+		}
+		fspiDisk, ferr := NewFSPIDisk(disk, &cfg)
+		if ferr != nil {
+			disk.Close()
+			return ferr
+		}
+		disk = fspiDisk
+	}
 	all, live, err := inventory(disk, nil)
 	defer func() {
 		for _, s := range all {

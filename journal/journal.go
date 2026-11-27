@@ -113,6 +113,10 @@ type Options struct {
 	Disk Disk
 	// Clock supplies time. Nil means the wall clock.
 	Clock Clock
+	// Integrity enables optional end-to-end FS-PI per-sector Protection
+	// Information validation wrapping Disk/File. Nil (default) leaves baseline
+	// journal behavior completely unchanged.
+	Integrity *FSPIConfig
 }
 
 // Marks are the three watermarks. Published <= Durable <= Visible.
@@ -250,6 +254,7 @@ type span struct {
 // Journal is safe for concurrent use.
 type Journal struct {
 	disk    Disk
+	fspi    *FSPIDisk
 	clock   Clock
 	segment int64
 	limit   int // most segment files
@@ -371,6 +376,19 @@ func Open(dir string, opt Options) (*Journal, error) {
 		if disk, err = Files(dir); err != nil {
 			return nil, err
 		}
+	}
+	if opt.Integrity != nil && opt.Integrity.Mode != ModeNone && opt.Integrity.Mode != ModeAEADOnlyBaseline {
+		cfg := *opt.Integrity
+		if cfg.ProbeDir == "" && dir != "" {
+			cfg.ProbeDir = dir
+		}
+		fspiDisk, ferr := NewFSPIDisk(disk, &cfg)
+		if ferr != nil {
+			disk.Close()
+			return nil, ferr
+		}
+		j.fspi = fspiDisk
+		disk = fspiDisk
 	}
 	j.disk = disk
 	if err := j.recover(opt.Published); err != nil {
@@ -857,6 +875,15 @@ func (j *Journal) Stats() Stats {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return j.stats
+}
+
+// FSPIStats returns end-to-end FS-PI integrity counters and hardware probe
+// telemetry. When Options.Integrity is nil or ModeNone, EffectiveMode is ModeNone.
+func (j *Journal) FSPIStats() FSPIStats {
+	if j.fspi == nil {
+		return FSPIStats{RequestedMode: ModeNone, EffectiveMode: ModeNone}
+	}
+	return j.fspi.Stats()
 }
 
 // Close makes everything appended durable, writes the final mark, stops the

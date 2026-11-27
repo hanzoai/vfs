@@ -1,0 +1,418 @@
+{
+  "timestamp_utc": "2026-11-25T13:00:46Z",
+  "host": {
+    "go_version": "go1.27.1",
+    "goos": "linux",
+    "goarch": "amd64",
+    "num_cpu": 2,
+    "cpu_model": "Intel(R) Xeon(R) CPU @ 2.30GHz",
+    "kernel": "Linux version 6.18.57"
+  },
+  "hardware_pi_probe": {
+    "probed": true,
+    "supported": false,
+    "tag_size": 0,
+    "interval_bytes": 0,
+    "read_verify": false,
+    "write_generate": false,
+    "checked_devices": [
+      "loop0",
+      "loop1",
+      "loop2",
+      "loop3",
+      "loop4",
+      "loop5",
+      "loop6",
+      "loop7",
+      "pmem0",
+      "vda"
+    ],
+    "reason": "none of 10 host block devices (loop0, loop1, loop2, loop3, loop4, loop5, loop6, loop7, pmem0, vda) expose NVMe/T10-DIF hardware protection information; falling back to software FS-PI validation"
+  },
+  "sector_bench": [
+    {
+      "mode": "none",
+      "effective_mode": "none",
+      "sectors": 4096,
+      "logical_bytes": 16777216,
+      "physical_bytes": 16777216,
+      "metadata_overhead_pct": 0,
+      "write_throughput_mb_s": 165.9,
+      "read_throughput_mb_s": 592.75,
+      "write_p50_us": 5.02,
+      "write_p99_us": 61.81,
+      "read_p50_us": 3.93,
+      "read_p99_us": 76.11,
+      "write_cpu_us_per_mb": 2614.38,
+      "read_cpu_us_per_mb": 2409.19,
+      "total_cpu_us_per_mb": 5023.57,
+      "cpu_overhead_vs_none_pct": 0,
+      "cpu_overhead_vs_aead_pct": -9.75,
+      "fault_detected_count": 0,
+      "fault_total_count": 7,
+      "detection_coverage_pct": 0,
+      "pre_plaintext_reject_count": 0,
+      "pre_plaintext_reject_rate_pct": 0,
+      "active_forgery_pi_layer_caught": false,
+      "fault_matrix": [
+        {
+          "fault_class": "single_bit_flip",
+          "detected": false,
+          "pre_decrypt_rejected": false,
+          "decrypt_invocations": 0
+        },
+        {
+          "fault_class": "multi_byte_burst_corruption",
+          "detected": false,
+          "pre_decrypt_rejected": false,
+          "decrypt_invocations": 0
+        },
+        {
+          "fault_class": "misdirected_write_block_swap",
+          "detected": false,
+          "pre_decrypt_rejected": false,
+          "decrypt_invocations": 0
+        },
+        {
+          "fault_class": "stale_lost_write_replay",
+          "detected": false,
+          "pre_decrypt_rejected": false,
+          "decrypt_invocations": 0
+        },
+        {
+          "fault_class": "cross_tenant_block_transplant",
+          "detected": false,
+          "pre_decrypt_rejected": false,
+          "decrypt_invocations": 0
+        },
+        {
+          "fault_class": "zeroed_sector_phantom_write",
+          "detected": false,
+          "pre_decrypt_rejected": false,
+          "decrypt_invocations": 0
+        },
+        {
+          "fault_class": "truncated_torn_tail_sector",
+          "detected": false,
+          "pre_decrypt_rejected": false,
+          "decrypt_invocations": 0
+        }
+      ],
+      "active_forgery_outcome": {
+        "fault_class": "crc_only_active_adversary_forgery",
+        "detected": false,
+        "pre_decrypt_rejected": false,
+        "decrypt_invocations": 0
+      }
+    },
+    {
+      "mode": "aead_only_baseline",
+      "effective_mode": "aead_only_baseline",
+      "sectors": 4096,
+      "logical_bytes": 16777216,
+      "physical_bytes": 16777216,
+      "metadata_overhead_pct": 0,
+      "write_throughput_mb_s": 118.75,
+      "read_throughput_mb_s": 380.65,
+      "write_p50_us": 6.24,
+      "write_p99_us": 95.65,
+      "read_p50_us": 5.32,
+      "read_p99_us": 90.28,
+      "write_cpu_us_per_mb": 3182.44,
+      "read_cpu_us_per_mb": 2383.88,
+      "total_cpu_us_per_mb": 5566.32,
+      "cpu_overhead_vs_none_pct": 10.8,
+      "cpu_overhead_vs_aead_pct": 0,
+      "fault_detected_count": 5,
+      "fault_total_count": 7,
+      "detection_coverage_pct": 71.43,
+      "pre_plaintext_reject_count": 0,
+      "pre_plaintext_reject_rate_pct": 0,
+      "active_forgery_pi_layer_caught": false,
+      "fault_matrix": [
+        {
+          "fault_class": "single_bit_flip",
+          "detected": true,
+          "pre_decrypt_rejected": false,
+          "decrypt_invocations": 1,
+          "error": "journal: corrupt record: HIP-0302 AEAD open failed: cipher: message authentication failed"
+        },
+        {
+          "fault_class": "multi_byte_burst_corruption",
+          "detected": true,
+          "pre_decrypt_rejected": false,
+          "decrypt_invocations": 1,
+          "error": "journal: corrupt record: HIP-0302 AEAD open failed: cipher: message authentication failed"
+        },
+        {
+          "fault_class": "misdirected_write_block_swap",
+          "detected": false,
+          "pre_decrypt_rejected": false,
+          "decrypt_invocations": 1
+        },
+        {
+          "fault_class": "stale_lost_write_replay",
+          "detected": false,
+          "pre_decrypt_rejected": false,
+          "decrypt_invocations": 1
+        },
+        {
+          "fault_class": "cross_tenant_block_transplant",
+          "detected": true,
+          "pre_decrypt_rejected": false,
+          "decrypt_invocations": 1,
+          "error": "journal: corrupt record: HIP-0302 AEAD open failed: cipher: message authentication failed"
+        },
+        {
+          "fault_class": "zeroed_sector_phantom_write",
+          "detected": true,
+          "pre_decrypt_rejected": false,
+          "decrypt_invocations": 1,
+          "error": "journal: corrupt record: HIP-0302 AEAD open failed: cipher: message authentication failed"
+        },
+        {
+          "fault_class": "truncated_torn_tail_sector",
+          "detected": true,
+          "pre_decrypt_rejected": false,
+          "decrypt_invocations": 1,
+          "error": "journal: corrupt record: HIP-0302 AEAD open failed: cipher: message authentication failed"
+        }
+      ],
+      "active_forgery_outcome": {
+        "fault_class": "crc_only_active_adversary_forgery",
+        "detected": true,
+        "pre_decrypt_rejected": false,
+        "decrypt_invocations": 1,
+        "error": "journal: corrupt record: HIP-0302 AEAD open failed: cipher: message authentication failed"
+      }
+    },
+    {
+      "mode": "software_crc32c",
+      "effective_mode": "software_crc32c",
+      "sectors": 4096,
+      "logical_bytes": 16777216,
+      "physical_bytes": 16859216,
+      "metadata_overhead_pct": 0.489,
+      "write_throughput_mb_s": 129.34,
+      "read_throughput_mb_s": 426.13,
+      "write_p50_us": 6.76,
+      "write_p99_us": 62.47,
+      "read_p50_us": 6.13,
+      "read_p99_us": 57.18,
+      "write_cpu_us_per_mb": 2986.38,
+      "read_cpu_us_per_mb": 2994.31,
+      "total_cpu_us_per_mb": 5980.69,
+      "cpu_overhead_vs_none_pct": 19.05,
+      "cpu_overhead_vs_aead_pct": 7.44,
+      "fault_detected_count": 7,
+      "fault_total_count": 7,
+      "detection_coverage_pct": 100,
+      "pre_plaintext_reject_count": 7,
+      "pre_plaintext_reject_rate_pct": 100,
+      "active_forgery_pi_layer_caught": false,
+      "fault_matrix": [
+        {
+          "fault_class": "single_bit_flip",
+          "detected": true,
+          "pre_decrypt_rejected": true,
+          "decrypt_invocations": 0,
+          "error": "journal/fspi: guard tag verification failed: 000000.seg lba=2: crc32c=0xa7fc3cfa want 0xe03a692f"
+        },
+        {
+          "fault_class": "multi_byte_burst_corruption",
+          "detected": true,
+          "pre_decrypt_rejected": true,
+          "decrypt_invocations": 0,
+          "error": "journal/fspi: guard tag verification failed: 000000.seg lba=2: crc32c=0x4596735b want 0xcc778df1"
+        },
+        {
+          "fault_class": "misdirected_write_block_swap",
+          "detected": true,
+          "pre_decrypt_rejected": true,
+          "decrypt_invocations": 0,
+          "error": "journal/fspi: ref tag LBA mismatch (misdirected write or block swap): 000000.seg lba=2: refTag=1 want 2"
+        },
+        {
+          "fault_class": "stale_lost_write_replay",
+          "detected": true,
+          "pre_decrypt_rejected": true,
+          "decrypt_invocations": 0,
+          "error": "journal/fspi: stale sector generation replay detected: 000000.seg lba=2: generation=2 \u003c expected 3"
+        },
+        {
+          "fault_class": "cross_tenant_block_transplant",
+          "detected": true,
+          "pre_decrypt_rejected": true,
+          "decrypt_invocations": 0,
+          "error": "journal/fspi: app tag tenant/volume domain mismatch: 000000.seg lba=2: appTag=0x91499f38 want 0xf039adb9"
+        },
+        {
+          "fault_class": "zeroed_sector_phantom_write",
+          "detected": true,
+          "pre_decrypt_rejected": true,
+          "decrypt_invocations": 0,
+          "error": "journal/fspi: zeroed sector phantom write detected: 000000.seg lba=2: sector and PI tuple are all zero"
+        },
+        {
+          "fault_class": "truncated_torn_tail_sector",
+          "detected": true,
+          "pre_decrypt_rejected": true,
+          "decrypt_invocations": 0,
+          "error": "journal/fspi: truncated or torn sector detected: 000000.seg lba=2: PI tuple zeroed (torn sector write)"
+        }
+      ],
+      "active_forgery_outcome": {
+        "fault_class": "crc_only_active_adversary_forgery",
+        "detected": true,
+        "pre_decrypt_rejected": false,
+        "decrypt_invocations": 1,
+        "error": "journal: corrupt record: HIP-0302 AEAD open failed: cipher: message authentication failed"
+      }
+    },
+    {
+      "mode": "keyed_blake3_pi",
+      "effective_mode": "keyed_blake3_pi",
+      "sectors": 4096,
+      "logical_bytes": 16777216,
+      "physical_bytes": 16924752,
+      "metadata_overhead_pct": 0.879,
+      "write_throughput_mb_s": 114.13,
+      "read_throughput_mb_s": 306.17,
+      "write_p50_us": 10.1,
+      "write_p99_us": 87.44,
+      "read_p50_us": 9.13,
+      "read_p99_us": 76.26,
+      "write_cpu_us_per_mb": 4155.19,
+      "read_cpu_us_per_mb": 3754.19,
+      "total_cpu_us_per_mb": 7909.38,
+      "cpu_overhead_vs_none_pct": 57.45,
+      "cpu_overhead_vs_aead_pct": 42.09,
+      "fault_detected_count": 7,
+      "fault_total_count": 7,
+      "detection_coverage_pct": 100,
+      "pre_plaintext_reject_count": 7,
+      "pre_plaintext_reject_rate_pct": 100,
+      "active_forgery_pi_layer_caught": true,
+      "fault_matrix": [
+        {
+          "fault_class": "single_bit_flip",
+          "detected": true,
+          "pre_decrypt_rejected": true,
+          "decrypt_invocations": 0,
+          "error": "journal/fspi: guard tag verification failed: 000000.seg lba=2: keyed BLAKE3-128 MAC verification failed"
+        },
+        {
+          "fault_class": "multi_byte_burst_corruption",
+          "detected": true,
+          "pre_decrypt_rejected": true,
+          "decrypt_invocations": 0,
+          "error": "journal/fspi: guard tag verification failed: 000000.seg lba=2: keyed BLAKE3-128 MAC verification failed"
+        },
+        {
+          "fault_class": "misdirected_write_block_swap",
+          "detected": true,
+          "pre_decrypt_rejected": true,
+          "decrypt_invocations": 0,
+          "error": "journal/fspi: ref tag LBA mismatch (misdirected write or block swap): 000000.seg lba=2: refTag=1 want 2"
+        },
+        {
+          "fault_class": "stale_lost_write_replay",
+          "detected": true,
+          "pre_decrypt_rejected": true,
+          "decrypt_invocations": 0,
+          "error": "journal/fspi: stale sector generation replay detected: 000000.seg lba=2: generation=2 \u003c expected 3"
+        },
+        {
+          "fault_class": "cross_tenant_block_transplant",
+          "detected": true,
+          "pre_decrypt_rejected": true,
+          "decrypt_invocations": 0,
+          "error": "journal/fspi: app tag tenant/volume domain mismatch: 000000.seg lba=2: appTag=0x61ad9228 want 0x75cc2fa6"
+        },
+        {
+          "fault_class": "zeroed_sector_phantom_write",
+          "detected": true,
+          "pre_decrypt_rejected": true,
+          "decrypt_invocations": 0,
+          "error": "journal/fspi: zeroed sector phantom write detected: 000000.seg lba=2: sector and PI tuple are all zero"
+        },
+        {
+          "fault_class": "truncated_torn_tail_sector",
+          "detected": true,
+          "pre_decrypt_rejected": true,
+          "decrypt_invocations": 0,
+          "error": "journal/fspi: truncated or torn sector detected: 000000.seg lba=2: PI tuple zeroed (torn sector write)"
+        }
+      ],
+      "active_forgery_outcome": {
+        "fault_class": "crc_only_active_adversary_forgery",
+        "detected": true,
+        "pre_decrypt_rejected": true,
+        "decrypt_invocations": 0,
+        "error": "journal/fspi: guard tag verification failed: 000000.seg lba=2: keyed BLAKE3-128 MAC verification failed"
+      }
+    }
+  ],
+  "journal_e2e_bench": [
+    {
+      "mode": "none",
+      "effective_mode": "none",
+      "records": 1024,
+      "record_bytes": 4096,
+      "append_sync_mb_s": 61.75,
+      "replay_mb_s": 1224.05,
+      "cpu_us_per_mb": 4322.5,
+      "metadata_bytes": 0,
+      "logical_bytes": 0,
+      "metadata_ratio_pct": 0,
+      "sectors_written": 0,
+      "sectors_verified": 0,
+      "validation_failures": 0
+    },
+    {
+      "mode": "software_crc32c",
+      "effective_mode": "software_crc32c",
+      "records": 1024,
+      "record_bytes": 4096,
+      "append_sync_mb_s": 42.19,
+      "replay_mb_s": 376.92,
+      "cpu_us_per_mb": 11974.25,
+      "metadata_bytes": 30960,
+      "logical_bytes": 6291456,
+      "metadata_ratio_pct": 0.492,
+      "sectors_written": 1064,
+      "sectors_verified": 1285,
+      "validation_failures": 0
+    },
+    {
+      "mode": "keyed_blake3_pi",
+      "effective_mode": "keyed_blake3_pi",
+      "records": 1024,
+      "record_bytes": 4096,
+      "append_sync_mb_s": 51.11,
+      "replay_mb_s": 281.03,
+      "cpu_us_per_mb": 14734.75,
+      "metadata_bytes": 74048,
+      "logical_bytes": 8388608,
+      "metadata_ratio_pct": 0.883,
+      "sectors_written": 1064,
+      "sectors_verified": 1285,
+      "validation_failures": 0
+    },
+    {
+      "mode": "hw_nvme_pi_probe",
+      "effective_mode": "keyed_blake3_pi",
+      "records": 1024,
+      "record_bytes": 4096,
+      "append_sync_mb_s": 46.45,
+      "replay_mb_s": 296.09,
+      "cpu_us_per_mb": 14320.75,
+      "metadata_bytes": 55536,
+      "logical_bytes": 6291456,
+      "metadata_ratio_pct": 0.883,
+      "sectors_written": 1064,
+      "sectors_verified": 1285,
+      "validation_failures": 0
+    }
+  ]
+}
