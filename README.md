@@ -61,6 +61,15 @@ for the measurements.
 Companion to [hanzoai/replicate](https://github.com/hanzoai/replicate) (SQLite WAL
 to S3). Implements HIP-0107 through `replica/`.
 
+## Testing
+
+`vfs` test doubles (`internal/storetest`) use POSIX process/resource syscalls (`Setsid`, `Getrusage`), so run tests on Linux (or WSL2 on Windows) or macOS:
+
+```bash
+go test -race -short -count=1 ./pkg/... ./internal/blake3 ./internal/bufpool ./internal/storetest
+go test -v -race -count=1 -run TestParaSync .
+```
+
 ## License
 
 Apache 2.0
