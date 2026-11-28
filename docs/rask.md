@@ -121,4 +121,7 @@ Measured regimes where shipping sorted `[]run` binary search is faster or narrow
 TMPDIR=/home/max/tmp go test -v -count=1 -run '^TestRASK|^TestSparse' .
 TMPDIR=/home/max/tmp go run ./tools/raskbench -csv docs/rask.csv -md docs/rask.md
 TMPDIR=/home/max/tmp go run ./tools/raskbench -full -json
+go test -run=^$ -bench=BenchmarkRASKQualification -benchmem -count=5 .
 ```
+
+See also [docs/rask-qualification.md](rask-qualification.md) for the independent `-bench -benchmem -count=5`, `pprof` heap profile, and `N = 8..8192` crossover qualification (#131).
