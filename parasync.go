@@ -39,7 +39,7 @@ const (
 	// and medium restores avoid double-fetching shards without unbounded RAM growth.
 	maxParaSyncStagedShardBytes = 128 << 20
 	paraSyncExtName             = "parasync"
-	paraSyncReceiptMagic        = "HNZPRCPT1"
+	paraSyncReceiptMagic        = "HNZPRCPT2"
 )
 
 // DeltaPlan describes the verified minimal object-level transfer required to
@@ -71,13 +71,15 @@ type RestoreOptions struct {
 	Streams int
 	// SaveVerifyReceipt writes a Cipher-sealed integrity receipt under
 	// ext/parasync/<keyed-hash> after end-to-end chunk verification succeeds,
-	// binding (packID, dstVersion, packSize) under the Volume's Cipher.
+	// binding (packID, dstVersion, packSize, packDigest, entriesDigest) under
+	// the Volume's Cipher.
 	SaveVerifyReceipt bool
 	// TrustSealedReceipt allows verifyRestoredTree to reuse a previously written
 	// Cipher-sealed ext/parasync/<keyed-hash> receipt for unchanged destination
-	// packs whose backend Version and size still match. When false (the default),
-	// every referenced chunk is read from dst, unsealed with chunkAAD, and hashed
-	// with BLAKE3 before Head CAS.
+	// packs whose backend Version, byte size, BLAKE3 pack digest, and verified
+	// chunk entry table all match. When false (the default), every referenced
+	// chunk is read from dst, unsealed with chunkAAD, and hashed with BLAKE3
+	// before Head CAS.
 	TrustSealedReceipt bool
 }
 
@@ -1095,8 +1097,11 @@ func verifyRestoredTree(
 			return fmt.Errorf("%w: pack %x has %d bytes and a chunk ends at %d", ErrCorrupt, pid[:6], len(data), reqEnd)
 		}
 
+		packDigest := [32]byte(blake3.Sum(data))
+		entriesDigest := hashParaSyncChunkEntries(entries)
+
 		if opts.TrustSealedReceipt && ver != "" {
-			if checkParaSyncPackReceipt(wctx, dstVerifyCount, c, head, pid, ver, uint64(len(data)), uint64(len(entries))) {
+			if checkParaSyncPackReceipt(wctx, dstVerifyCount, c, head, pid, ver, uint64(len(data)), packDigest, entriesDigest) {
 				receiptsVerified.Add(1)
 				chunksVerified.Add(int64(len(entries)))
 				return nil
@@ -1120,7 +1125,7 @@ func verifyRestoredTree(
 		}
 
 		if opts.SaveVerifyReceipt && ver != "" {
-			if err := saveParaSyncPackReceipt(wctx, dstTransferCount, c, head, pid, ver, uint64(len(data)), uint64(len(entries))); err != nil {
+			if err := saveParaSyncPackReceipt(wctx, dstTransferCount, c, head, pid, ver, uint64(len(data)), packDigest, entriesDigest); err != nil {
 				return err
 			}
 		}
@@ -1170,12 +1175,26 @@ func recoverDestinationGCPack(
 	}
 }
 
-func encodeParaSyncReceipt(pid packID, ver backend.Version, packSize, chunkCount uint64) []byte {
+func hashParaSyncChunkEntries(entries []parasyncChunkEntry) [32]byte {
+	h := blake3.New()
+	_, _ = h.Write(binary.AppendUvarint(nil, uint64(len(entries))))
+	for _, ent := range entries {
+		_, _ = h.Write(ent.ch[:])
+		_, _ = h.Write(binary.AppendUvarint(nil, ent.id.off))
+		_, _ = h.Write(binary.AppendUvarint(nil, ent.id.n))
+	}
+	var out [32]byte
+	copy(out[:], h.Sum(nil))
+	return out
+}
+
+func encodeParaSyncReceipt(pid packID, ver backend.Version, packSize uint64, packDigest, entriesDigest [32]byte) []byte {
 	var b []byte
 	b = append(b, paraSyncReceiptMagic...)
 	b = append(b, pid[:]...)
 	b = binary.AppendUvarint(b, packSize)
-	b = binary.AppendUvarint(b, chunkCount)
+	b = append(b, packDigest[:]...)
+	b = append(b, entriesDigest[:]...)
 	b = binary.AppendUvarint(b, uint64(len(ver)))
 	b = append(b, ver...)
 	return b
@@ -1189,7 +1208,7 @@ func checkParaSyncPackReceipt(
 	pid packID,
 	ver backend.Version,
 	packSize uint64,
-	chunkCount uint64,
+	packDigest, entriesDigest [32]byte,
 ) bool {
 	rest := extRest(head.Seed, paraSyncExtName, pid[:])
 	objKey := extObjectKey(paraSyncExtName, rest)
@@ -1201,7 +1220,7 @@ func checkParaSyncPackReceipt(
 	if err != nil {
 		return false
 	}
-	return bytes.Equal(plain, encodeParaSyncReceipt(pid, ver, packSize, chunkCount))
+	return bytes.Equal(plain, encodeParaSyncReceipt(pid, ver, packSize, packDigest, entriesDigest))
 }
 
 func saveParaSyncPackReceipt(
@@ -1212,11 +1231,11 @@ func saveParaSyncPackReceipt(
 	pid packID,
 	ver backend.Version,
 	packSize uint64,
-	chunkCount uint64,
+	packDigest, entriesDigest [32]byte,
 ) error {
 	rest := extRest(head.Seed, paraSyncExtName, pid[:])
 	objKey := extObjectKey(paraSyncExtName, rest)
-	plain := encodeParaSyncReceipt(pid, ver, packSize, chunkCount)
+	plain := encodeParaSyncReceipt(pid, ver, packSize, packDigest, entriesDigest)
 	sealed, err := seal(c, extAAD(head.ID, paraSyncExtName, rest), plain)
 	if err != nil {
 		return err
